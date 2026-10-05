@@ -39,7 +39,7 @@ function spawnExplosion(x, z) {
   // 煙：まわりに広がりながら上がり、ゆっくり薄くなる（＝煙が晴れる）
   for (let i = 0; i < 14; i++) {
     const a = rnd() * Math.PI * 2, r = 0.5 + rnd() * 2;
-    const mat = new THREE.MeshLambertMaterial({ color: 0x5a5a5a, transparent: true, opacity: 0.75, depthWrite: false });
+    const mat = new THREE.MeshLambertMaterial({ color: 0x5a5a5a, transparent: true, opacity: 0.5, depthWrite: false });
     addPart('smoke', FX.geo.sphere, mat, { x: x + Math.cos(a) * r, y: 0.5 + rnd() * 2, z: z + Math.sin(a) * r },
       { x: Math.cos(a) * (1 + rnd() * 1.5), y: 0.8 + rnd() * 1.2, z: Math.sin(a) * (1 + rnd() * 1.5) }, 3.2 + rnd() * 1.2, 1.1 + rnd() * 0.8);
   }
@@ -81,7 +81,7 @@ function updateFx(dt) {
       const drag = Math.max(0, 1 - dt * 0.7);
       v.x *= drag; v.z *= drag;
       m.scale.setScalar(p.size * (1 + 1.3 * a));
-      m.material.opacity = 0.75 * Math.pow(1 - a, 1.5);
+      m.material.opacity = 0.5 * Math.pow(1 - a, 1.5);   // 濃すぎると爆心のまわりが何も見えないので薄め
     } else if (p.kind === 'spark') {
       v.y -= CFG.gravity * dt;
       m.position.x += v.x * dt; m.position.y += v.y * dt; m.position.z += v.z * dt;

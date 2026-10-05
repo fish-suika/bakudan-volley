@@ -76,13 +76,15 @@ const CFG = {
     center: 1.0, r: 0.45,                                 // 体の中心の高さ、体の当たり判定（球）の半径
     bounce: 0.45, floorBounce: 0.3, landSpeed: 4,         // 跳ね返り。床へ秒速 landSpeed 以上で落ちたら弾む
     friction: 4,                                          // 床を滑るときの減速 m/s²（秒速 8m なら 8m 滑る）
-    stickSpeed: 5, stickTime: 0.35, slideDown: 1.8,       // この速さ以上で壁に当たると張り付き、少ししてずり落ちる
+    stickSpeed: 8, stickTime: 0.35, slideDown: 3.5,       // この速さ以上で壁に当たると張り付き、少ししてずり落ちる
     netHang: 0.25, hangTime: 1.0,                         // ネットに引っかかる確率と、ぶら下がる時間
     downTime: 0.8, getupTime: 0.6,                        // 倒れている時間、起き上がるのにかかる時間
-    maxTime: 7,                                           // 爆発からこれ以上は待たずに点を進める（秒）
+    maxTime: 6,                                           // 爆発からこれ以上は待たずに点を進める（秒）
+    outward: 0.5,                                         // 飛ぶ向きを自陣の奥（横の壁）へ寄せる強さ
+    zFront: 0.15, zBack: 0.8,                             // 手前（カメラ側）・奥へ飛ぶ速さの倍率。手前へ飛ぶと画面の外へ出るので弱める
   },
   fx: { freeze: 0.12 },                                   // 爆発の瞬間に画面を止める時間（秒）
-  camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
+  camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25, boomFov: 58, boomLookY: 3.3 },   // 爆発の間は画角を広げて、天井・横の壁・倒れた人まで入れる
 };
 // ===== 爆弾の物理（three.js 非依存） =====
 // 爆弾は床に触れたときだけ爆発する。天井・壁・ネット・選手には跳ね返るだけ。
@@ -648,6 +650,10 @@ function blastActors(R, hit) {
     let nx, nz;
     if (d > 0.1) { nx = dx / d; nz = dz / d; }
     else { const ang = R.rand() * Math.PI * 2; nx = Math.cos(ang); nz = Math.sin(ang); }   // 真上で爆発したら向きはでたらめ
+    nx += (a.x < 0 ? -1 : 1) * B.outward;                 // 自陣の奥（横の壁）のほうへ寄せる
+    const nn = Math.hypot(nx, nz) || 1;
+    nx /= nn; nz /= nn;
+    nz *= nz > 0 ? B.zFront : B.zBack;                    // カメラのほう（+z）へはあまり飛ばさない（画面の外へ出るため）
     const jit = () => 1 + (R.rand() - 0.5) * 2 * B.jitter;
     const side = B.speed * k * jit();
     const up = B.up * k * jit() * (mishap(R, B.superChance) ? B.superMul : 1);

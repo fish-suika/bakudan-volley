@@ -46,6 +46,7 @@
     for (const e of R.events) {
       if (e.type === 'choose') { showChoice(e.scene, e.attack); sndSlow(); }
       else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
+      else if (e.type === 'floor') hideChoice();         // 選んでいる途中で床に落ちたら、ボタンを消す
       else if (e.type === 'explode') {
         sndBoom();
         spawnExplosion(e.x, e.z);

@@ -26,6 +26,10 @@ function blastActors(R, hit) {
     let nx, nz;
     if (d > 0.1) { nx = dx / d; nz = dz / d; }
     else { const ang = R.rand() * Math.PI * 2; nx = Math.cos(ang); nz = Math.sin(ang); }   // 真上で爆発したら向きはでたらめ
+    nx += (a.x < 0 ? -1 : 1) * B.outward;                 // 自陣の奥（横の壁）のほうへ寄せる
+    const nn = Math.hypot(nx, nz) || 1;
+    nx /= nn; nz /= nn;
+    nz *= nz > 0 ? B.zFront : B.zBack;                    // カメラのほう（+z）へはあまり飛ばさない（画面の外へ出るため）
     const jit = () => 1 + (R.rand() - 0.5) * 2 * B.jitter;
     const side = B.speed * k * jit();
     const up = B.up * k * jit() * (mishap(R, B.superChance) ? B.superMul : 1);

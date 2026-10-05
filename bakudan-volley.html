@@ -135,13 +135,15 @@ const CFG = {
     center: 1.0, r: 0.45,                                 // 体の中心の高さ、体の当たり判定（球）の半径
     bounce: 0.45, floorBounce: 0.3, landSpeed: 4,         // 跳ね返り。床へ秒速 landSpeed 以上で落ちたら弾む
     friction: 4,                                          // 床を滑るときの減速 m/s²（秒速 8m なら 8m 滑る）
-    stickSpeed: 5, stickTime: 0.35, slideDown: 1.8,       // この速さ以上で壁に当たると張り付き、少ししてずり落ちる
+    stickSpeed: 8, stickTime: 0.35, slideDown: 3.5,       // この速さ以上で壁に当たると張り付き、少ししてずり落ちる
     netHang: 0.25, hangTime: 1.0,                         // ネットに引っかかる確率と、ぶら下がる時間
     downTime: 0.8, getupTime: 0.6,                        // 倒れている時間、起き上がるのにかかる時間
-    maxTime: 7,                                           // 爆発からこれ以上は待たずに点を進める（秒）
+    maxTime: 6,                                           // 爆発からこれ以上は待たずに点を進める（秒）
+    outward: 0.5,                                         // 飛ぶ向きを自陣の奥（横の壁）へ寄せる強さ
+    zFront: 0.15, zBack: 0.8,                             // 手前（カメラ側）・奥へ飛ぶ速さの倍率。手前へ飛ぶと画面の外へ出るので弱める
   },
   fx: { freeze: 0.12 },                                   // 爆発の瞬間に画面を止める時間（秒）
-  camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
+  camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25, boomFov: 58, boomLookY: 3.3 },   // 爆発の間は画角を広げて、天井・横の壁・倒れた人まで入れる
 };
 // ===== 爆弾の物理（three.js 非依存） =====
 // 爆弾は床に触れたときだけ爆発する。天井・壁・ネット・選手には跳ね返るだけ。
@@ -707,6 +709,10 @@ function blastActors(R, hit) {
     let nx, nz;
     if (d > 0.1) { nx = dx / d; nz = dz / d; }
     else { const ang = R.rand() * Math.PI * 2; nx = Math.cos(ang); nz = Math.sin(ang); }   // 真上で爆発したら向きはでたらめ
+    nx += (a.x < 0 ? -1 : 1) * B.outward;                 // 自陣の奥（横の壁）のほうへ寄せる
+    const nn = Math.hypot(nx, nz) || 1;
+    nx /= nn; nz /= nn;
+    nz *= nz > 0 ? B.zFront : B.zBack;                    // カメラのほう（+z）へはあまり飛ばさない（画面の外へ出るため）
     const jit = () => 1 + (R.rand() - 0.5) * 2 * B.jitter;
     const side = B.speed * k * jit();
     const up = B.up * k * jit() * (mishap(R, B.superChance) ? B.superMul : 1);
@@ -1318,7 +1324,7 @@ function spawnExplosion(x, z) {
   // 煙：まわりに広がりながら上がり、ゆっくり薄くなる（＝煙が晴れる）
   for (let i = 0; i < 14; i++) {
     const a = rnd() * Math.PI * 2, r = 0.5 + rnd() * 2;
-    const mat = new THREE.MeshLambertMaterial({ color: 0x5a5a5a, transparent: true, opacity: 0.75, depthWrite: false });
+    const mat = new THREE.MeshLambertMaterial({ color: 0x5a5a5a, transparent: true, opacity: 0.5, depthWrite: false });
     addPart('smoke', FX.geo.sphere, mat, { x: x + Math.cos(a) * r, y: 0.5 + rnd() * 2, z: z + Math.sin(a) * r },
       { x: Math.cos(a) * (1 + rnd() * 1.5), y: 0.8 + rnd() * 1.2, z: Math.sin(a) * (1 + rnd() * 1.5) }, 3.2 + rnd() * 1.2, 1.1 + rnd() * 0.8);
   }
@@ -1360,7 +1366,7 @@ function updateFx(dt) {
       const drag = Math.max(0, 1 - dt * 0.7);
       v.x *= drag; v.z *= drag;
       m.scale.setScalar(p.size * (1 + 1.3 * a));
-      m.material.opacity = 0.75 * Math.pow(1 - a, 1.5);
+      m.material.opacity = 0.5 * Math.pow(1 - a, 1.5);   // 濃すぎると爆心のまわりが何も見えないので薄め
     } else if (p.kind === 'spark') {
       v.y -= CFG.gravity * dt;
       m.position.x += v.x * dt; m.position.y += v.y * dt; m.position.z += v.z * dt;
@@ -1386,17 +1392,18 @@ function updateFx(dt) {
   FX.light.intensity = FX.glow;
   FX.shake = Math.max(0, FX.shake - dt * 1.2);
 }
-// ===== カメラ（中継の角度：コートの横、斜め上から）。爆発の間は上を見上げて爆発のほうへ振り、天井まで飛ぶ人も入れる =====
-const CAM = { cam: null, x: 0, y: null, lx: 0, ly: null, lz: 0 };
+// ===== カメラ（中継の角度：コートの横、斜め上から）。爆発の間は画角を広げて爆発のほうへ振り、天井まで飛ぶ人も倒れた人も入れる =====
+const CAM = { cam: null, x: 0, y: null, lx: 0, ly: null, lz: 0, fov: null };
 
 // focusX：爆弾の x（少しだけ追って横に振る）。boomAt：爆発した場所（爆発の間だけ）
 function updateCamera(dt, focusX, boomAt) {
   const c = CFG.camera, s = FX.shake;
   const goal = boomAt
-    ? { x: boomAt.x * 0.3, y: c.y, lx: boomAt.x * 0.45, ly: 5.0, lz: boomAt.z * 0.2 }
-    : { x: focusX * c.follow, y: c.y, lx: focusX * c.follow, ly: c.lookY, lz: 0 };
+    ? { x: boomAt.x * 0.3, y: c.y, lx: boomAt.x * 0.45, ly: c.boomLookY, lz: boomAt.z * 0.2, fov: c.boomFov }
+    : { x: focusX * c.follow, y: c.y, lx: focusX * c.follow, ly: c.lookY, lz: 0, fov: c.fov };
   const k = Math.min(1, dt * (boomAt ? 3 : 1.5));
   for (const key in goal) CAM[key] = CAM[key] === null ? goal[key] : CAM[key] + (goal[key] - CAM[key]) * k;
+  if (Math.abs(CAM.cam.fov - CAM.fov) > 0.01) { CAM.cam.fov = CAM.fov; CAM.cam.updateProjectionMatrix(); }
   CAM.cam.position.set(CAM.x + (Math.random() - 0.5) * s, CAM.y + (Math.random() - 0.5) * s, c.z);
   CAM.cam.lookAt(CAM.lx, CAM.ly, CAM.lz);
 }
@@ -1494,6 +1501,7 @@ function hideResult() { document.getElementById('result').classList.remove('on')
     for (const e of R.events) {
       if (e.type === 'choose') { showChoice(e.scene, e.attack); sndSlow(); }
       else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
+      else if (e.type === 'floor') hideChoice();         // 選んでいる途中で床に落ちたら、ボタンを消す
       else if (e.type === 'explode') {
         sndBoom();
         spawnExplosion(e.x, e.z);
