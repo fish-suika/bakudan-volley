@@ -262,6 +262,14 @@ function runUntilChoose(R, sec) {                          // 'choose' が出る
   }
   return ev;
 }
+function runUntil(R, type, sec) {                          // type の出来事が出るまで（最大 sec 秒）進め、その間の出来事を返す
+  const ev = R.events.splice(0);
+  for (let i = 0; i < Math.round(sec * 60) && !ev.some(e => e.type === type); i++) {
+    tickRally(R, 1 / 60);
+    ev.push(...R.events.splice(0));
+  }
+  return ev;
+}
 const hitBy = (ev, a, kind) => ev.some(e => e.type === 'hit' && e.actor === a && e.kind === kind);
 const boomSide = ev => { const e = ev.find(e => e.type === 'explode'); return e ? e.side : null; };
 function quietRally() { const R = newRally(zero); R.idle[1] = true; return R; }   // 敵が受けない（Phase 2 までのテスト用）
@@ -407,7 +415,7 @@ test('爆発してしばらくすると点が入り、全員が歩いて定位�
   const R = quietRally();
   startPoint(R, 0);
   choose(R, 'serve');
-  const ev = runFor(R, 5 + CFG.afterBoom);
+  const ev = runUntil(R, 'point', 5 + CFG.afterBoom + CFG.blast.maxTime);
   const p = ev.find(e => e.type === 'point');
   eq(p && [p.scorer, p.score], [0, [1, 0]]);
   eq(R.score, [1, 0]);
@@ -422,7 +430,7 @@ test('3 点目で試合が終わり、newGame で 0-0 から自分のサーブ�
   let ev = [];
   for (let k = 0; k < CFG.winScore; k++) {
     onFloor(R, { x: 5, z: 0, side: 1 });
-    ev = ev.concat(runFor(R, CFG.explodeDelay + CFG.afterBoom + 0.1));
+    ev = ev.concat(runUntil(R, 'point', CFG.explodeDelay + CFG.afterBoom + CFG.blast.maxTime));
   }
   eq(R.state, 'over');
   eq(R.winner, 0);
@@ -612,6 +620,27 @@ test('collideFlyers: 飛んできた人が立っている人に当たると、�
   eq(!!b.fly, true);
   eq(b.fly.vel.x > 0, true, '同じ向きへ');
   eq(R.events.some(e => e.type === 'collide'), true);
+});
+
+test('ラリー：爆発で吹っ飛んだ人が起き上がるまで点は入らず、起き上がったら入る', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  onFloor(R, { x: 5, z: 0, side: 1 });
+  const ev = runFor(R, CFG.explodeDelay + CFG.afterBoom + 0.1);
+  eq(ev.some(e => e.type === 'explode'), true);
+  eq(R.actors[2].fly !== null || R.actors[3].fly !== null, true, 'まだ飛んでいる人がいる');
+  eq(ev.some(e => e.type === 'point'), false, 'まだ点は入らない');
+  const ev2 = runUntil(R, 'point', CFG.blast.maxTime);
+  eq(ev2.some(e => e.type === 'point'), true);
+  eq(R.actors.every(a => !a.fly) || R.state === 'reset', true);
+});
+
+test('ラリー：startPoint は飛んでいる人も定位置に戻す', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  blastActors(R, { x: 5, z: 0, side: 1 });
+  startPoint(R, 0);
+  eq(R.actors.every(a => a.fly === null), true);
 });
 
 // ===== 結果表示 =====

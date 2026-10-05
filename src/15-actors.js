@@ -59,7 +59,7 @@ function separateActors(R) {
   const A = R.actors, min = CFG.player.r * 2;
   for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
     const a = A[i], b = A[j];
-    if (a.y > 0 || b.y > 0) continue;
+    if (a.y > 0 || b.y > 0 || a.fly || b.fly) continue;
     const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
     if (d >= min) continue;
     const nx = d > 1e-6 ? dx / d : 1, nz = d > 1e-6 ? dz / d : 0, push = (min - d) / 2;

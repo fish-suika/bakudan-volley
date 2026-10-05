@@ -64,7 +64,7 @@ function newGame(R) {
 // 全員を定位置に置いて、すぐ team のサーブを始める（試合の最初とテスト用）
 function startPoint(R, team) {
   for (const a of R.actors) {
-    a.task = null; a.y = 0; a.vy = 0; a.lastHit = null; a.stun = 0;
+    a.task = null; a.y = 0; a.vy = 0; a.lastHit = null; a.stun = 0; a.fly = null;
     a.home = { ...a.base }; a.x = a.base.x; a.z = a.base.z;
   }
   const s = serverOf(R, team);
@@ -289,8 +289,9 @@ function tickRally(R, realDt) {
   const dt = R.state === 'choose' ? realDt * CFG.slowScale : realDt;
   if (R.state === 'choose') R.choose.left -= realDt;
   R.simT += dt;
-  for (const a of R.actors) stepActor(a, dt, R.simT);
+  for (const a of R.actors) { if (a.fly) stepFly(a, dt, R); else stepActor(a, dt, R.simT); }
   separateActors(R);
+  collideFlyers(R);
   for (const a of R.actors) {                             // 爆弾に触らない動き（空振り・跳ぶだけ）の終わり
     const t = a.task;
     if (!t || t.contact) continue;
@@ -317,12 +318,16 @@ function tickRally(R, realDt) {
     if (!R.boom.fired && R.boom.t >= CFG.explodeDelay) {
       R.boom.fired = true;
       R.events.push({ type: 'explode', x: R.boom.hit.x, z: R.boom.hit.z, side: R.boom.hit.side });
+      blastActors(R, R.boom.hit);                         // 選手を吹っ飛ばす
     }
-    if (R.boom.t >= CFG.explodeDelay + CFG.afterBoom) endPoint(R, R.boom.hit.side);
+    const settled = R.actors.every(a => !a.fly);          // 全員が起き上がった
+    if (R.boom.t >= CFG.explodeDelay + CFG.afterBoom && (settled || R.boom.t >= CFG.blast.maxTime)) endPoint(R, R.boom.hit.side);
   }
   if (R.state === 'reset') {                              // 全員が定位置（サーブの人はサーブ位置）に着いたら次のサーブ
     R.resetT += realDt;
+    const flying = R.actors.some(a => a.fly);
+    if (flying) R.resetT = 0;
     const home = R.actors.every(a => Math.hypot(a.x - a.home.x, a.z - a.home.z) < 0.05);
-    if (home || R.resetT > CFG.resetMax) startServe(R, R.nextServe);
+    if (!flying && (home || R.resetT > CFG.resetMax)) startServe(R, R.nextServe);
   }
 }
