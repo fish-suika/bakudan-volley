@@ -9,17 +9,14 @@ function showToast(text, sec) {
 }
 
 const SCENE_TEXT = { serve: 'サーブ番', incoming: '相手が打った！', tossed: 'トスが上がった！' };
-function showChoice(scene, attack, allowed) {
-  const box = document.getElementById('actions');
-  box.classList.add('on');
-  box.querySelectorAll('button').forEach(b => b.classList.toggle('off', !!allowed && !allowed.includes(b.dataset.act)));
+function showChoice(scene, attack) {
+  document.getElementById('actions').classList.add('on');
   const el = document.getElementById('scene');
   el.textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
   el.classList.add('on');
 }
 function hideChoice() {
   document.getElementById('actions').classList.remove('on');
-  document.querySelectorAll('#actions button.off').forEach(b => b.classList.remove('off'));
   document.getElementById('scene').classList.remove('on');
   setTimer(0);
 }

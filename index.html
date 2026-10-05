@@ -22,7 +22,6 @@
     background:rgba(20,24,30,.72);color:#fff;font:700 clamp(14px,2.6vw,18px) var(--jp);letter-spacing:.06em;cursor:pointer;touch-action:manipulation}
   #actions.on button{border-color:#ffd04a;background:rgba(60,44,10,.85)}
   #actions button b{display:block;font-size:11px;font-weight:400;opacity:.7}
-  #actions.on button.off{opacity:.3;border-color:rgba(255,255,255,.3);background:rgba(20,24,30,.72);pointer-events:none}
   #actions button:active{transform:scale(.96)}
   #timer{flex:0 0 100%;height:5px;background:rgba(255,255,255,.18);border-radius:3px;overflow:hidden}
   #timer i{display:block;height:100%;width:0;background:#ffd04a}
@@ -430,17 +429,11 @@ function endPoint(R, loser) {
   s.home = serveSpotOf(s);
 }
 
-// その場面で選べる行動（ルール上ありえないものは押せない）
-function allowedActions(scene, serve) {
-  if (scene === 'serve') return ['receive', 'attack', 'serve'];      // サーブ番にブロックはできない
-  if (scene === 'incoming' && serve) return ['receive', 'serve'];   // 相手のサーブはブロックもアタックもできない
-  return ACTIONS.slice();
-}
-
-function openChoice(R, scene, attack, serve) {
+// 4 つの行動はどの場面でも押せる。場面に合わない行動は、合わないなりの動きになる（本人の判断、2026-10-05）
+function openChoice(R, scene, attack) {
   R.state = 'choose';
-  R.choose = { scene, attack: !!attack, left: CFG.choiceTime, allowed: allowedActions(scene, serve) };
-  R.events.push({ type: 'choose', scene, attack: !!attack, allowed: R.choose.allowed });
+  R.choose = { scene, attack: !!attack, left: CFG.choiceTime };
+  R.events.push({ type: 'choose', scene, attack: !!attack });
 }
 
 // 爆弾がそのまま落ちると team の側か
@@ -508,12 +501,12 @@ function giveNoop(R, a, kind, then) {
 // プレイヤーが選んだ（action が null なら時間切れ）
 function choose(R, action) {
   if (R.state !== 'choose') return;
-  if (action !== null && !R.choose.allowed.includes(action)) return;   // 押せない行動：選択は続く
   const sc = R.choose.scene, attack = R.choose.attack, me = R.me, mate = R.mate, P = CFG.success, b = R.ball;
   R.choose = null; R.state = 'play';
   R.events.push({ type: 'chosen', action, scene: sc });
   if (sc === 'serve') {
     if (action === 'serve' || action === null) giveServe(R, me, roll(R, P.serve.serve));
+    else if (action === 'block') giveNoop(R, me, 'blockNoop', () => openChoice(R, 'serve'));   // 爆弾を持ったままネット際で跳び、戻ってもう一度選ぶ
     else {                                                // その場で爆弾を放り上げ、レシーブかアタックで打つ
       const d = dirOf(me.team);
       b.held = null;
@@ -596,7 +589,7 @@ function afterHit(R, a, t) {
   if (!headingTo(R, a.team)) {                            // 相手側へ飛んだ
     retarget(R, 1 - a.team);
     if (a.team === 0) enemyDefend(R);
-    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false, t.kind === 'serve');
+    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false);
   }
 }
 
@@ -1054,17 +1047,14 @@ function showToast(text, sec) {
 }
 
 const SCENE_TEXT = { serve: 'サーブ番', incoming: '相手が打った！', tossed: 'トスが上がった！' };
-function showChoice(scene, attack, allowed) {
-  const box = document.getElementById('actions');
-  box.classList.add('on');
-  box.querySelectorAll('button').forEach(b => b.classList.toggle('off', !!allowed && !allowed.includes(b.dataset.act)));
+function showChoice(scene, attack) {
+  document.getElementById('actions').classList.add('on');
   const el = document.getElementById('scene');
   el.textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
   el.classList.add('on');
 }
 function hideChoice() {
   document.getElementById('actions').classList.remove('on');
-  document.querySelectorAll('#actions button.off').forEach(b => b.classList.remove('off'));
   document.getElementById('scene').classList.remove('on');
   setTimer(0);
 }
@@ -1124,7 +1114,7 @@ function hideResult() { document.getElementById('result').classList.remove('on')
     const dt = Math.min(clock.getDelta(), 1 / 30);
     tickRally(R, dt);
     for (const e of R.events) {
-      if (e.type === 'choose') showChoice(e.scene, e.attack, e.allowed);
+      if (e.type === 'choose') showChoice(e.scene, e.attack);
       else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
       else if (e.type === 'explode') {
         spawnExplosion(e.x, e.z);

@@ -100,17 +100,11 @@ function endPoint(R, loser) {
   s.home = serveSpotOf(s);
 }
 
-// その場面で選べる行動（ルール上ありえないものは押せない）
-function allowedActions(scene, serve) {
-  if (scene === 'serve') return ['receive', 'attack', 'serve'];      // サーブ番にブロックはできない
-  if (scene === 'incoming' && serve) return ['receive', 'serve'];   // 相手のサーブはブロックもアタックもできない
-  return ACTIONS.slice();
-}
-
-function openChoice(R, scene, attack, serve) {
+// 4 つの行動はどの場面でも押せる。場面に合わない行動は、合わないなりの動きになる（本人の判断、2026-10-05）
+function openChoice(R, scene, attack) {
   R.state = 'choose';
-  R.choose = { scene, attack: !!attack, left: CFG.choiceTime, allowed: allowedActions(scene, serve) };
-  R.events.push({ type: 'choose', scene, attack: !!attack, allowed: R.choose.allowed });
+  R.choose = { scene, attack: !!attack, left: CFG.choiceTime };
+  R.events.push({ type: 'choose', scene, attack: !!attack });
 }
 
 // 爆弾がそのまま落ちると team の側か
@@ -178,12 +172,12 @@ function giveNoop(R, a, kind, then) {
 // プレイヤーが選んだ（action が null なら時間切れ）
 function choose(R, action) {
   if (R.state !== 'choose') return;
-  if (action !== null && !R.choose.allowed.includes(action)) return;   // 押せない行動：選択は続く
   const sc = R.choose.scene, attack = R.choose.attack, me = R.me, mate = R.mate, P = CFG.success, b = R.ball;
   R.choose = null; R.state = 'play';
   R.events.push({ type: 'chosen', action, scene: sc });
   if (sc === 'serve') {
     if (action === 'serve' || action === null) giveServe(R, me, roll(R, P.serve.serve));
+    else if (action === 'block') giveNoop(R, me, 'blockNoop', () => openChoice(R, 'serve'));   // 爆弾を持ったままネット際で跳び、戻ってもう一度選ぶ
     else {                                                // その場で爆弾を放り上げ、レシーブかアタックで打つ
       const d = dirOf(me.team);
       b.held = null;
@@ -266,7 +260,7 @@ function afterHit(R, a, t) {
   if (!headingTo(R, a.team)) {                            // 相手側へ飛んだ
     retarget(R, 1 - a.team);
     if (a.team === 0) enemyDefend(R);
-    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false, t.kind === 'serve');
+    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false);
   }
 }
 
