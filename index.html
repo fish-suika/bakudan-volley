@@ -289,7 +289,53 @@ function updatePlayer(pl, dt, t, focus) {
   pl.j.hips.position.y += Math.sin(t * 3 + pl.phase) * 0.012;
   lookAtTarget(pl, focus, dt);
 }
-// ===== 爆弾の見た目 =====
+// ===== 爆弾の見た目（黒い球にバレーボールの縫い目、口金と導火線）と床の影 =====
+function makeBombMesh(scene) {
+  const r = CFG.ball.r;
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), new THREE.MeshPhongMaterial({ color: 0x1b1b1f, shininess: 80 }));
+  body.castShadow = true;
+  g.add(body);
+  const seamMat = new THREE.MeshBasicMaterial({ color: 0xe8e8e8 });
+  for (const rot of [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]]) {
+    const s = new THREE.Mesh(new THREE.TorusGeometry(r * 1.005, 0.012, 6, 40), seamMat);
+    s.rotation.set(rot[0], rot[1], rot[2]);
+    g.add(s);
+  }
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.08, 12), new THREE.MeshLambertMaterial({ color: 0x777777 }));
+  cap.position.y = r + 0.02;
+  g.add(cap);
+  const fuse = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 6), new THREE.MeshLambertMaterial({ color: 0xc8b48a }));
+  fuse.position.set(0.03, r + 0.12, 0);
+  fuse.rotation.z = -0.4;
+  g.add(fuse);
+  const spark = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffd04a }));
+  spark.position.set(0.07, r + 0.2, 0);
+  g.add(spark);
+  scene.add(g);
+  // 真下の丸い影（高い所にあっても落ちる場所が分かるように）
+  const shadow = new THREE.Mesh(new THREE.CircleGeometry(r, 20),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false }));
+  shadow.rotation.x = -Math.PI / 2;
+  scene.add(shadow);
+  return { g, spark, shadow };
+}
+
+// ball が null なら隠す。飛んでいる間は進む向きに転がす
+function updateBombMesh(m, ball, dt) {
+  m.g.visible = m.shadow.visible = !!ball;
+  if (!ball) return;
+  m.g.position.set(ball.pos.x, ball.pos.y, ball.pos.z);
+  if (ball.live) {
+    m.g.rotation.x += ball.vel.z / CFG.ball.r * dt;
+    m.g.rotation.z -= ball.vel.x / CFG.ball.r * dt;
+  }
+  m.spark.scale.setScalar(0.7 + Math.random() * 0.8);    // 導火線の火花のちらつき（時間で爆発はしない）
+  m.shadow.position.set(ball.pos.x, 0.015, ball.pos.z);
+  const k = Math.max(0.4, 1 - ball.pos.y / 14);
+  m.shadow.scale.setScalar(k * 1.2);
+  m.shadow.material.opacity = 0.35 * k;
+}
 // ===== ポーズ（関節の角度、ラジアン） =====
 // 腕・太ももは rx が負で前へ振る。spine の rx が正で前かがみ。膝・肘は rx で曲げる
 // 左右は L が体の左（ローカル +X）。rz が L で正・R で負なら外へ開く
@@ -360,7 +406,22 @@ function updateCamera(dt, focusX) {
   CAM.cam.position.set(CAM.x + (Math.random() - 0.5) * s, c.y + (Math.random() - 0.5) * s, c.z);
   CAM.cam.lookAt(CAM.x, c.lookY, 0);
 }
-// ===== 入力 =====
+// ===== 入力（Phase 1 は試し用：床をクリック・タップすると爆弾が飛んでくる。Space でランダムな場所へ） =====
+function initInput(canvas, camera, onFloor) {
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  const floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
+  canvas.addEventListener('pointerdown', e => {
+    ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    if (ray.ray.intersectPlane(floor, hit)) onFloor(hit.x, hit.z);
+  });
+  addEventListener('keydown', e => {
+    if (e.code !== 'Space') return;
+    e.preventDefault();
+    const C = CFG.court;
+    onFloor((Math.random() * 2 - 1) * C.halfLen, (Math.random() * 2 - 1) * C.halfWid);
+  });
+}
 // ===== 画面の文字 =====
 let __toastTimer = 0;
 function showToast(text, sec) {
@@ -385,12 +446,27 @@ function showToast(text, sec) {
   const camera = new THREE.PerspectiveCamera(CFG.camera.fov, innerWidth / innerHeight, 0.1, 200);
   CAM.cam = camera;
 
-  // 選手 4 人（Phase 1 は定位置で構えるだけ）
+  // 選手 4 人（Phase 1 は定位置で構えるだけ）。爆弾の当たり判定には足元の位置を渡す
   const players = CFG.startSpots.map(s => {
     const pl = makePlayer(scene, s.team);
     placePlayer(pl, s.x, s.z);
     return pl;
   });
+  const colliders = CFG.startSpots.map(s => ({ x: s.x, z: s.z }));
+
+  const bombMesh = makeBombMesh(scene);
+  let ball = null;      // 今の爆弾（無ければ null）
+  let boom = null;      // 床に触れてからの待ち { t, hit, fired }
+
+  // 試し投げ：狙った地点の反対側のコートから投げ込む
+  function throwTo(x, z) {
+    if (boom) return;                                     // 爆発が終わるまでは投げない
+    const from = { x: x < 0 ? CFG.test.fromX : -CFG.test.fromX, y: CFG.test.fromY, z: z * 0.3 };
+    ball = newBall(from.x, from.y, from.z);
+    ball.vel = shotVelocity(from, { x, z }, CFG.test.apex);
+  }
+  initInput(renderer.domElement, camera, throwTo);
+  window.GAME = { scene, players, colliders, throwTo, get ball() { return ball; } };   // 確認用
 
   addEventListener('resize', () => {
     renderer.setSize(innerWidth, innerHeight);
@@ -404,9 +480,25 @@ function showToast(text, sec) {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 1 / 30);
     t += dt;
-    for (const pl of players) updatePlayer(pl, dt, t, { x: 0, y: 3, z: 0 });
+    if (ball && ball.live) {
+      const hit = stepBall(ball, dt, colliders);
+      if (hit) boom = { t: 0, hit, fired: false };
+    }
+    if (boom) {
+      boom.t += dt;
+      if (!boom.fired && boom.t >= CFG.explodeDelay) {   // 一瞬の間をおいて爆発
+        boom.fired = true;
+        ball = null;
+        spawnExplosion(boom.hit.x, boom.hit.z);
+        showToast(boom.hit.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
+      }
+      if (boom.t >= CFG.explodeDelay + 1.2) boom = null;
+    }
+    const focus = ball ? ball.pos : { x: 0, y: 3, z: 0 };
+    for (const pl of players) updatePlayer(pl, dt, t, focus);
+    updateBombMesh(bombMesh, ball, dt);
     updateFx(dt);
-    updateCamera(dt, 0);
+    updateCamera(dt, ball ? ball.pos.x : 0);
     renderer.render(scene, camera);
   }
   frame();
