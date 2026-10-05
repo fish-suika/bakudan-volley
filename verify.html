@@ -34,8 +34,30 @@ const CFG = {
     { team: 1, x: 5, z: -2 },  { team: 1, x: 5, z: 2 },
   ],
   explodeDelay: 0.25,                                     // 床に触れてから爆発するまでの「一瞬の間」（秒）
+  // ---- Phase 2：行動と選択 ----
+  slowScale: 0.15,                                        // 選ぶ間の時間の速さ
+  choiceTime: 2.5,                                        // 選べる時間（実時間・秒）。過ぎたら味方に任せる
+  afterBoom: 1.6,                                         // 爆発してから次のサーブまで（秒）
+  runSpeed: 7,                                            // 選手が走る速さ m/s
+  reach: 1.0,                                             // 爆弾に手が届く横の距離 m
+  jumpH: 0.9,                                             // アタック・ブロック・サーブで跳ぶ高さ m
+  contactH: { receive: 0.8, toss: 2.3, attack: 3.4, direct: 2.4, serve: 2.8 },   // 爆弾に触る高さ m
+  serveSpot: 9.5,                                         // サーブを打つ位置（ネットからの距離。エンドラインの 0.5m 外）
+  serveHold: 0.9,                                         // サーブ前に構える「真剣な間」（秒）
+  hardSpeed: 13,                                          // これより速い球は「強い球」（直接打ち返しにくい）
+  shots: {
+    pass: { toX: 2.0, apex: 5.5 },                        // レシーブ → ネットから 2m の自陣へ高く上げる
+    set: { toX: 1.2, apex: 6.0 },                         // トス → ネットから 1.2m のアタック位置へ
+    spikeSpeed: 17, serveApex: 4.2, returnApex: 5.0,
+  },
+  success: {                                              // 場面 × 行動の成功率（仕様書 3.3）
+    serve: { receive: 0.3, attack: 0.4, serve: 0.9 },
+    incoming: { receive: 0.9, directSoft: 0.7, directHard: 0.25, block: 0.6 },
+    tossed: { receive: 0.95, attack: 0.9 },
+  },
+  ai: { receive: 0.85, toss: 0.9, attack: 0.8, serve: 0.9 },
+  enemyOpeners: ['serve', 'attack'],                      // Phase 2 の試し：敵は サーブ → トスからアタック を交互に打つ
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
-  test: { apex: 7, fromX: 7, fromY: 2.6 },                // 試し投げ：反対側 x=±7、高さ 2.6m から、最高点 7m
 };
 // ===== 爆弾の物理（three.js 非依存） =====
 // 爆弾は床に触れたときだけ爆発する。天井・壁・ネット・選手には跳ね返るだけ。
@@ -135,6 +157,323 @@ function shotVelocity(from, to, apex) {
   const vy = Math.sqrt(2 * g * (top - from.y));
   const t = vy / g + Math.sqrt(2 * (top - r) / g);          // 上がる時間＋最高点から床までの時間
   return { x: (to.x - from.x) / t, y: vy, z: (to.z - from.z) / t };
+}
+
+// 爆弾を試しに動かして（選手は無視）、高さ h まで降りてきたときの位置と、今からの時間を返す。
+// 上りの途中で h を通っても数えない。先に床に触れるなら null
+function predictDescent(ball, h, maxT) {
+  const b = { pos: { ...ball.pos }, vel: { ...ball.vel }, live: true };
+  const dt = 1 / 120;
+  for (let t = 0; t < (maxT || 6); ) {
+    const hit = stepBall(b, dt, [], () => 0.5);
+    t += dt;
+    if (hit) return h <= CFG.ball.r + 0.05 ? { x: hit.x, z: hit.z, t } : null;   // 床の高さを聞かれたなら、床に触れた場所が答え（刻みの間に抜けるため）
+    if (b.vel.y < 0 && b.pos.y <= h) return { x: b.pos.x, z: b.pos.z, t };
+  }
+  return null;
+}
+
+// 強打：from から to（x, z の床）へ、横の速さ speed で叩き込む初速。
+// ネットの白帯にかかるなら、速さを落として（＝山なりにして）越えられる速さを探す
+function spikeVelocity(from, to, speed) {
+  const g = CFG.gravity, r = CFG.ball.r, N = CFG.net;
+  const dx = to.x - from.x, dz = to.z - from.z, dist = Math.hypot(dx, dz);
+  for (let s = speed; s >= 6; s -= 0.5) {
+    const t = dist / s;
+    const v = { x: dx / t, y: (r - from.y + 0.5 * g * t * t) / t, z: dz / t };
+    if (from.x * to.x >= 0) return v;                     // ネットを越えない打球は確かめない
+    const tc = -from.x / v.x;                             // ネットの真上を通る時刻
+    const yc = from.y + v.y * tc - 0.5 * g * tc * tc;
+    if (yc - r > N.top + 0.05) return v;
+  }
+  return shotVelocity(from, to, from.y + 1.5);            // どうしても越えないなら山なりで
+}
+// ===== 選手の動き（three.js 非依存） =====
+// actor = { id, team, x, z, y（跳んでいる高さ）, vy, home（仕事が無いとき戻る所）, base（定位置）, task, moving, lastHit }
+// task  = { kind, ok, contact, h, at, pending, jump, jumpAt, jumped, jumpOnArrive, whiff, end, then, target, hold, contactAt, start }
+function newActor(id, team, x, z) {
+  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null };
+}
+function dirOf(team) { return team === 0 ? 1 : -1; }      // 相手コートの向き（x の符号）
+function riseTime() { return Math.sqrt(2 * CFG.jumpH / CFG.gravity); }   // 踏み切ってから最高点まで
+
+// dt 進める。地上なら task.at（仕事が無ければ home）へ走る。jumpAt を過ぎたら跳ぶ
+function stepActor(a, dt, simT) {
+  const t = a.task;
+  if (a.y > 0) {
+    a.vy -= CFG.gravity * dt;
+    a.y += a.vy * dt;
+    if (a.y <= 0) { a.y = 0; a.vy = 0; }
+  }
+  const g = t ? t.at : a.home;
+  a.moving = false;
+  if (a.y === 0) {
+    const dx = g.x - a.x, dz = g.z - a.z, d = Math.hypot(dx, dz), step = CFG.runSpeed * dt;
+    if (d > 0.02) {
+      a.moving = true;
+      if (d <= step) { a.x = g.x; a.z = g.z; } else { a.x += dx / d * step; a.z += dz / d * step; }
+    }
+  }
+  if (t && t.jumpOnArrive && t.jumpAt == null && !a.moving) t.jumpAt = simT;
+  if (t && t.jumpAt != null && !t.jumped && simT >= t.jumpAt && a.y === 0) {
+    t.jumped = true;
+    a.vy = Math.sqrt(2 * CFG.gravity * CFG.jumpH);
+    a.y = 1e-4;
+  }
+}
+
+// 爆弾に触れたか。'hit' / 'miss' / null（まだ）
+function checkContact(a, ball) {
+  const t = a.task;
+  if (!t || !t.contact || t.pending || !ball.live || ball.held) return null;
+  const p = ball.pos;
+  if (t.kind === 'block') {                               // ネットの上で、空中の手に当たれば止める
+    if (t.ok && a.y > 0.3 && Math.abs(p.x) < 0.7 && Math.abs(p.z - a.z) < 0.9 && p.y > 2.2 && p.y < 2.5 + CFG.jumpH + 0.6) return 'hit';
+    if (p.x * dirOf(a.team) < -1.0) return 'miss';        // 自陣の奥へ抜けた
+    return null;
+  }
+  if (ball.vel.y > 0 || p.y > t.h) return null;           // まだ上にある
+  if (Math.hypot(p.x - a.x, p.z - a.z) <= CFG.reach) return t.whiff ? 'miss' : 'hit';
+  if (p.y < t.h - 0.6) return 'miss';
+  return null;
+}
+// ===== ラリーの流れ（three.js 非依存） =====
+// R.state: 'choose'（スローで選択中）/ 'play'（それ以外の試合中）/ 'boom'（床に触れたあと）
+// 選ぶ場面: 'serve' ①自分のサーブ番 / 'incoming' ②相手が打った（attack なら相手のトス＝アタックが来る）/ 'tossed' ③味方が自分にトスした
+// 描画側へは R.events に出来事を積む：choose / chosen / hit / miss / floor / explode
+const ACTIONS = ['receive', 'attack', 'block', 'serve'];
+
+function newRally(rand) {
+  const actors = CFG.startSpots.map((s, i) => newActor(i, s.team, s.x, s.z));
+  return {
+    state: 'play', simT: 0, ball: null, actors, me: actors[0], mate: actors[1],
+    choose: null, boom: null, awaiting: false, openerIdx: 0, events: [], rand: rand || Math.random,
+  };
+}
+function partnerOf(R, a) { return R.actors.find(o => o.team === a.team && o !== a); }
+function roll(R, p) { return R.rand() < p; }
+
+// 次の 1 点を始める。team が打つ（0 ならプレイヤー＝①の選択、1 なら敵。Phase 2 の敵はサーブとアタックを交互に）
+function startPoint(R, team) {
+  for (const a of R.actors) {
+    a.task = null; a.y = 0; a.vy = 0; a.lastHit = null;
+    a.home = { ...a.base }; a.x = a.base.x; a.z = a.base.z;
+  }
+  R.boom = null; R.choose = null; R.awaiting = false; R.state = 'play';
+  const server = team === 0 ? R.me : R.actors[2];
+  server.home = { x: -dirOf(team) * CFG.serveSpot, z: server.base.z * 0.5 };
+  server.x = server.home.x; server.z = server.home.z;
+  R.ball = newBall(server.x, 1.2, server.z);
+  R.ball.held = server;
+  if (team === 0) { openChoice(R, 'serve'); return; }
+  const kind = CFG.enemyOpeners[R.openerIdx++ % CFG.enemyOpeners.length];
+  if (kind === 'serve') giveServe(R, server, roll(R, CFG.ai.serve));
+  else enemyAttackOpener(R);
+}
+
+// Phase 2 の試し：敵の 1 人がネット際でトスを上げ、もう 1 人がアタックしてくる
+function enemyAttackOpener(R) {
+  const setter = R.actors[2], hitter = R.actors[3];
+  setter.home = { x: 2.5, z: 0 }; setter.x = 2.5; setter.z = 0;
+  R.ball = newBall(2.5, 2.3, 0);
+  R.ball.vel = shotVelocity(R.ball.pos, { x: CFG.shots.set.toX, z: hitter.base.z * 0.5 }, CFG.shots.set.apex);
+  setter.lastHit = { kind: 'toss', at: R.simT };
+  afterHit(R, setter, { kind: 'toss', ok: true });
+}
+
+function openChoice(R, scene, attack) {
+  R.state = 'choose';
+  R.choose = { scene, attack: !!attack, left: CFG.choiceTime };
+  R.events.push({ type: 'choose', scene, attack: !!attack });
+}
+
+// 爆弾がそのまま落ちると team の側か
+function headingTo(R, team) {
+  const l = predictDescent(R.ball, CFG.ball.r + 0.01);
+  return !!l && sideOf(l.x) === team;
+}
+
+// 仕事を渡す。爆弾がもう自分の側へ来ているなら、すぐ行き先を決める（来ていなければ pending のまま）
+function giveTask(R, a, kind, ok, extra) {
+  a.task = Object.assign({ kind, ok, contact: true, pending: true, at: { x: a.x, z: a.z }, start: R.simT }, extra);
+  const t = a.task;
+  if (t.contact && t.pending && headingTo(R, a.team)) aimTask(R, a);
+  return t;
+}
+
+// 落ちてくる場所を予測して行き先を決める。ネットを越えて相手側へは行かない
+function aimTask(R, a) {
+  const t = a.task, p = predictDescent(R.ball, t.h);
+  if (!p) return;
+  const G = CFG.gym;
+  let x = clamp(p.x, -G.halfX + 0.5, G.halfX - 0.5);
+  x = a.team === 0 ? Math.min(x, -0.4) : Math.max(x, 0.4);
+  t.at = { x, z: clamp(p.z, -G.halfZ + 0.5, G.halfZ - 0.5) };
+  t.pending = false;
+  t.contactAt = R.simT + p.t;
+  if (t.jump) t.jumpAt = t.contactAt - riseTime();
+}
+function retarget(R, team) {
+  for (const a of R.actors) if (a.team === team && a.task && a.task.pending && a.task.kind !== 'block') aimTask(R, a);
+}
+
+function giveServe(R, a, ok) {
+  const t = giveTask(R, a, 'serve', ok, { h: CFG.contactH.serve, pending: false, hold: R.simT + CFG.serveHold, jump: true });
+  t.jumpAt = t.hold + 0.3;
+}
+function giveReceive(R, a, ok) { return giveTask(R, a, 'receive', ok, { h: CFG.contactH.receive }); }
+function giveReturn(R, a, ok) { return giveTask(R, a, 'return', ok, { h: CFG.contactH.receive }); }
+function giveToss(R, a, target) { return giveTask(R, a, 'toss', roll(R, CFG.ai.toss), { h: CFG.contactH.toss, target }); }
+function giveAttack(R, a, ok, kind) {
+  const whiff = !ok && R.rand() < 0.5;                    // 失敗の半分は空振り、残りはネットにかける
+  return giveTask(R, a, kind || 'attack', ok, { h: kind === 'direct' ? CFG.contactH.direct : CFG.contactH.attack, jump: true, whiff });
+}
+// ブロック：相手のアタッカーの正面のネット際へ行き、打つ瞬間に合わせて跳ぶ
+function giveBlock(R, a, ok) {
+  const opp = R.actors.find(o => o.team !== a.team && o.task && (o.task.kind === 'attack' || o.task.kind === 'direct'));
+  const z = opp ? opp.task.at.z : R.ball.pos.z;
+  const t = giveTask(R, a, 'block', ok, { pending: false, at: { x: -dirOf(a.team) * 0.5, z: clamp(z, -4, 4) } });
+  if (opp && opp.task.contactAt != null) t.jumpAt = opp.task.contactAt - riseTime() + 0.05;
+  else t.jumpOnArrive = true;
+  return t;
+}
+// 場面に合わない動き：'blockNoop' はネット際で跳ぶだけ、'whiff' はその場でサーブの構えをして空振り
+function giveNoop(R, a, kind, then) {
+  if (kind === 'blockNoop') return giveTask(R, a, kind, false, { contact: false, pending: false, at: { x: -dirOf(a.team) * 0.5, z: a.z }, jumpOnArrive: true, then });
+  return giveTask(R, a, kind, false, { contact: false, pending: false, end: R.simT + 1.0, then });
+}
+
+// プレイヤーが選んだ（action が null なら時間切れ）
+function choose(R, action) {
+  if (R.state !== 'choose') return;
+  const sc = R.choose.scene, attack = R.choose.attack, me = R.me, mate = R.mate, P = CFG.success, b = R.ball;
+  R.choose = null; R.state = 'play';
+  R.events.push({ type: 'chosen', action, scene: sc });
+  if (sc === 'serve') {
+    if (action === 'serve' || action === null) giveServe(R, me, roll(R, P.serve.serve));
+    else if (action === 'block') giveNoop(R, me, 'blockNoop', () => openChoice(R, 'serve'));
+    else {                                                // その場で爆弾を放り上げ、レシーブかアタックで打つ
+      const d = dirOf(me.team);
+      b.held = null;
+      b.pos = { x: me.x + d * 0.3, y: 1.3, z: me.z };
+      b.vel = { x: 0, y: action === 'receive' ? 2.5 : 4, z: 0 };
+      giveTask(R, me, action === 'receive' ? 'bump' : 'standSpike', roll(R, P.serve[action]),
+        { h: action === 'receive' ? 0.9 : 1.9, pending: false });
+    }
+    return;
+  }
+  if (sc === 'incoming') {
+    R.awaiting = true;
+    if (action === 'receive') giveReceive(R, me, roll(R, P.incoming.receive));
+    else if (action === 'attack') {
+      const hard = attack || Math.hypot(b.vel.x, b.vel.y, b.vel.z) > CFG.hardSpeed;
+      giveAttack(R, me, roll(R, hard ? P.incoming.directHard : P.incoming.directSoft), 'direct');
+    } else {
+      if (action === 'block') giveBlock(R, me, attack && roll(R, P.incoming.block));
+      else if (action === 'serve') giveNoop(R, me, 'whiff');
+      giveReceive(R, mate, roll(R, CFG.ai.receive));      // 空いた所は味方がカバー（時間切れも同じ）
+    }
+    return;
+  }
+  // 'tossed'
+  if (action === 'attack') giveAttack(R, me, roll(R, P.tossed.attack));
+  else if (action === 'receive') giveReturn(R, me, roll(R, P.tossed.receive));
+  else if (action === 'block') giveNoop(R, me, 'blockNoop');
+  else if (action === 'serve') giveNoop(R, me, 'whiff');
+  else giveReturn(R, mate, roll(R, CFG.ai.receive));      // 時間切れ：味方が返す
+}
+
+// 打った球の初速。成功なら狙いどおり、失敗なら笑える方向へ
+function shotFor(R, a, t) {
+  const d = dirOf(a.team), p = R.ball.pos, rnd = R.rand, S = CFG.shots, W = CFG.court.halfWid - 0.7;
+  const from = { x: p.x, y: p.y, z: p.z };
+  const opp = (x0, x1) => ({ x: d * (x0 + rnd() * (x1 - x0)), z: (rnd() * 2 - 1) * W });   // 相手コートのネットから x0〜x1 m
+  const shank = () => shotVelocity(from, { x: -d * (9.5 + rnd() * 3), z: (rnd() * 2 - 1) * 7 }, from.y + 1.5 + rnd() * 2);   // 自陣の後ろへ弾く
+  const intoNet = () => { const dx = -p.x, dy = 1.7 - p.y, n = Math.hypot(dx, dy) || 1; return { x: dx / n * 14, y: dy / n * 14, z: 0 }; };
+  switch (t.kind) {
+    case 'receive': return t.ok ? shotVelocity(from, { x: -d * S.pass.toX, z: 0 }, S.pass.apex) : shank();
+    case 'toss':
+      return t.ok ? shotVelocity(from, { x: -d * S.set.toX, z: clamp(t.target.z, -3.5, 3.5) }, S.set.apex)
+                  : shotVelocity(from, { x: -d * 0.3, z: p.z }, from.y + 0.8);          // 低いトスでネット際に落ちる
+    case 'attack': case 'direct': case 'standSpike':
+      return t.ok ? spikeVelocity(from, opp(4.5, 8.5), S.spikeSpeed) : intoNet();
+    case 'block': return spikeVelocity(from, opp(1.5, 4), 10);
+    case 'return': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shank();
+    case 'bump': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shotVelocity(from, { x: p.x - d * 0.6, z: p.z + 0.4 }, from.y + 1.2);   // 足元に落とす
+    case 'serve': return t.ok ? shotVelocity(from, opp(3, 8.5), S.serveApex) : shotVelocity(from, { x: -d * 0.6, z: p.z * 0.5 }, from.y + 0.3);   // ネットに届かない
+  }
+  return { x: 0, y: 0, z: 0 };
+}
+
+// 打ったあと：レシーブ → 相方がトス、トス → 相方（レシーブした人）がアタック。相手側へ飛んだら相手の pending を決める
+function afterHit(R, a, t) {
+  const partner = partnerOf(R, a);
+  if (a.team === 0) R.awaiting = false;
+  if (t.ok && t.kind === 'receive') giveToss(R, partner, a);
+  if (t.ok && t.kind === 'toss') {
+    if (partner === R.me) openChoice(R, 'tossed');
+    else giveAttack(R, partner, roll(R, CFG.ai.attack));
+    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', true);   // 敵のトス＝アタックが来る
+  }
+  if (!headingTo(R, a.team)) {
+    retarget(R, 1 - a.team);
+    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false);
+  }
+}
+
+function resolveContact(R, a, c) {
+  const t = a.task;
+  a.task = null;
+  a.home = { ...a.base };                                 // サーブを打ったら定位置へ戻る
+  if (c === 'miss') { R.events.push({ type: 'miss', actor: a, kind: t.kind }); return; }
+  a.lastHit = { kind: t.kind, at: R.simT };
+  R.ball.vel = shotFor(R, a, t);
+  R.events.push({ type: 'hit', actor: a, kind: t.kind, ok: t.ok });
+  afterHit(R, a, t);
+}
+
+function onFloor(R, hit) {
+  for (const a of R.actors) a.task = null;
+  R.state = 'boom'; R.choose = null;
+  R.boom = { t: 0, hit, fired: false };
+  R.events.push({ type: 'floor', x: hit.x, z: hit.z, side: hit.side });
+}
+
+// realDt（実時間）進める。選択中はゲームの時間を slowScale 倍にする
+function tickRally(R, realDt) {
+  const dt = R.state === 'choose' ? realDt * CFG.slowScale : realDt;
+  if (R.state === 'choose') R.choose.left -= realDt;
+  R.simT += dt;
+  for (const a of R.actors) stepActor(a, dt, R.simT);
+  for (const a of R.actors) {                             // 爆弾に触らない動き（空振り・跳ぶだけ）の終わり
+    const t = a.task;
+    if (!t || t.contact) continue;
+    if (t.end != null ? R.simT >= t.end : (t.jumped && a.y === 0)) { a.task = null; if (t.then) t.then(); }
+  }
+  const b = R.ball;
+  if (b && b.held) {
+    const a = b.held, d = dirOf(a.team), t = a.task;
+    b.pos = { x: a.x + d * 0.35, y: a.y + 1.15, z: a.z };
+    if (t && t.kind === 'serve' && R.simT >= t.hold) {    // 構えの間が終わったらトスを上げる
+      b.held = null;
+      b.pos = { x: a.x + d * 0.3, y: 2.0, z: a.z };
+      b.vel = { x: d * 0.4, y: 4.5, z: 0 };
+    }
+  } else if (b && b.live) {
+    for (const a of R.actors) { const c = checkContact(a, b); if (c) resolveContact(R, a, c); }
+    const colliders = R.actors.filter(a => !(a.task && a.task.contact) && !(a.lastHit && R.simT - a.lastHit.at < 0.4)).map(a => ({ x: a.x, z: a.z }));   // 打とうとしている人・打ったばかりの人には当たらない（打った球を自分の体で弾かない）
+    const hit = stepBall(b, dt, colliders, R.rand);
+    if (hit) onFloor(R, hit);
+  }
+  if (R.state === 'choose' && R.choose.left <= 0) choose(R, null);   // 時間切れ：味方に任せる
+  if (R.state === 'boom') {
+    R.boom.t += realDt;
+    if (!R.boom.fired && R.boom.t >= CFG.explodeDelay) {
+      R.boom.fired = true;
+      R.events.push({ type: 'explode', x: R.boom.hit.x, z: R.boom.hit.z, side: R.boom.hit.side });
+    }
+    if (R.boom.t >= CFG.explodeDelay + CFG.afterBoom) startPoint(R, R.boom.hit.side);   // 取られた側のサーブ
+  }
 }
 // ===== 検証ハーネス =====
 const __results = [];
@@ -261,6 +600,215 @@ test('shotVelocity: 最高点が打つ高さより低くても壊れない（真
   const v = shotVelocity({ x: -2, y: 3, z: 0 }, { x: -4, z: 0 }, 1);
   eq(Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z), true);
   eq(v.x < 0, true);
+});
+
+// ===== 予測と強打 =====
+test('predictDescent: 爆弾を動かさずに、床に触れる場所を当てる', () => {
+  const from = { x: 7, y: 2.6, z: 0 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = shotVelocity(from, { x: -5, z: 2 }, 7);
+  const p = predictDescent(b, CFG.ball.r + 0.01);
+  near(p.x, -5, 0.05, 'x'); near(p.z, 2, 0.05, 'z');
+  eq(p.t > 1 && p.t < 3, true, '時間');
+  eq([b.pos.x, b.pos.y, b.live], [7, 2.6, true], '元の爆弾は動かない');
+});
+
+test('predictDescent: 上りの途中ではなく、降りてくるときの高さで答える', () => {
+  const b = newBall(-3, 1, 0); b.vel = { x: 0, y: 6, z: 0 };
+  const p = predictDescent(b, 2);
+  eq(p.t > 0.6, true);
+});
+
+test('spikeVelocity: 高い打点からの強打は、ネットを越えて狙った所に落ちる', () => {
+  const from = { x: -1.3, y: 3.4, z: -3.5 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = spikeVelocity(from, { x: 4.5, z: -3.8 }, 17);
+  const h = run(b, 3);
+  eq(h && h.side, 1);
+  near(h.x, 4.5, 0.1, 'x'); near(h.z, -3.8, 0.1, 'z');
+  eq(Math.hypot(b.vel.x, b.vel.z) > 10, true, '強い');
+});
+
+test('spikeVelocity: 打点が低ければ速さを落としてネットを越える', () => {
+  const from = { x: -1.3, y: 2.6, z: 0 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = spikeVelocity(from, { x: 5, z: 0 }, 17);
+  const h = run(b, 3);
+  eq(h && h.side, 1);
+  near(h.x, 5, 0.1, 'x');
+});
+
+// ===== 選手の動き =====
+function stepFor(a, sec) { let t = 0; for (let i = 0; i < Math.round(sec * 60); i++) { t += 1 / 60; stepActor(a, 1 / 60, t); } }
+
+test('stepActor: task.at へ秒速 runSpeed で走り、着いたら止まる。仕事が無ければ home へ戻る', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -2, z: 0 } };
+  stepFor(a, 0.2);
+  near(a.x, -5 + CFG.runSpeed * 0.2, 0.05);
+  eq(a.moving, true);
+  stepFor(a, 1);
+  eq([a.x, a.moving], [-2, false]);
+  a.task = null;
+  stepFor(a, 1);
+  eq(a.x, -5, 'home');
+});
+
+test('stepActor: jumpAt を過ぎると跳び、jumpH まで上がって床に戻る', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -5, z: 0 }, jumpAt: 0 };
+  let top = 0;
+  for (let i = 0; i < 90; i++) { stepActor(a, 1 / 60, i / 60); top = Math.max(top, a.y); }
+  near(top, CFG.jumpH, 0.05);
+  eq(a.y, 0);
+  eq(a.task.jumped, true);
+});
+
+test('checkContact: 降りてきた爆弾が高さ h・手の届く距離なら hit、届かずに下を通れば miss、空振りなら miss', () => {
+  const a = newActor(0, 0, -3, 0);
+  a.task = { kind: 'receive', contact: true, h: 0.8, at: { x: -3, z: 0 } };
+  const b = newBall(-3.3, 0.79, 0); b.vel = { x: 0, y: -3, z: 0 };
+  eq(checkContact(a, b), 'hit');
+  b.pos.y = 2; eq(checkContact(a, b), null, 'まだ上');
+  b.pos = { x: -6, y: 0.15, z: 0 }; eq(checkContact(a, b), 'miss', '遠くの下を通った');
+  b.pos = { x: -6, y: 0.5, z: 0 }; eq(checkContact(a, b), null, 'まだ分からない');
+  a.task.whiff = true; b.pos = { x: -3.3, y: 0.79, z: 0 };
+  eq(checkContact(a, b), 'miss', '空振り');
+  a.task = { kind: 'receive', contact: true, pending: true, h: 0.8, at: { x: -3, z: 0 } };
+  eq(checkContact(a, b), null, '行き先が決まる前は触らない');
+});
+
+// ===== ラリー =====
+const zero = () => 0;
+function runFor(R, sec) {
+  const ev = R.events.splice(0);
+  for (let i = 0; i < Math.round(sec * 60); i++) { tickRally(R, 1 / 60); ev.push(...R.events.splice(0)); }
+  return ev;
+}
+function runUntilChoose(R, sec) {                          // 'choose' が出るまで進め、その間の出来事を返す
+  const ev = R.events.splice(0);
+  for (let i = 0; i < Math.round(sec * 60) && !ev.some(e => e.type === 'choose'); i++) {
+    tickRally(R, 1 / 60);
+    ev.push(...R.events.splice(0));
+  }
+  return ev;
+}
+const hitBy = (ev, a, kind) => ev.some(e => e.type === 'hit' && e.actor === a && e.kind === kind);
+const boomSide = ev => { const e = ev.find(e => e.type === 'explode'); return e ? e.side : null; };
+
+test('startPoint(0)：プレイヤーがエンドラインの外で爆弾を持ち、①サーブ番の選択になる', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  eq([R.state, R.choose.scene, R.ball.held === R.me], ['choose', 'serve', true]);
+  eq(R.me.x, -CFG.serveSpot);
+  eq(R.events.some(e => e.type === 'choose' && e.scene === 'serve'), true);
+});
+
+test('① サーブを選ぶと、構えてからトスを上げて打ち、相手コートで爆発する', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  choose(R, 'serve');
+  const ev = runFor(R, 5);
+  eq(hitBy(ev, R.me, 'serve'), true);
+  eq(boomSide(ev), 1);
+});
+
+test('① 時間切れなら自動でサーブする', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  const ev = runFor(R, CFG.choiceTime + 0.1);
+  eq(ev.some(e => e.type === 'chosen' && e.action === null), true);
+  eq(R.state, 'play');
+  eq(R.me.task && R.me.task.kind, 'serve');
+});
+
+test('① ブロックを選ぶと、爆弾を持ったままネット際で跳んで戻り、もう一度選ぶ', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  choose(R, 'block');
+  const ev = runUntilChoose(R, 6);
+  eq(ev.some(e => e.type === 'choose' && e.scene === 'serve'), true);
+  eq(R.ball.held === R.me, true);
+  eq(ev.some(e => e.type === 'explode'), false);
+});
+
+test('敵のサーブを打たれた瞬間に ②（アタックではない）の選択になる', () => {
+  const R = newRally(zero);
+  startPoint(R, 1);
+  const ev = runUntilChoose(R, 4);
+  const c = ev.find(e => e.type === 'choose');
+  eq(c && [c.scene, c.attack], ['incoming', false]);
+  eq(hitBy(ev, R.actors[2], 'serve'), true);
+});
+
+test('② レシーブ → 味方がトス → ③ の選択 → アタックで相手コートに爆発', () => {
+  const R = newRally(zero);
+  startPoint(R, 1);
+  runUntilChoose(R, 4);
+  choose(R, 'receive');
+  const ev = runUntilChoose(R, 6);
+  eq(hitBy(ev, R.me, 'receive'), true, '自分がレシーブ');
+  eq(hitBy(ev, R.mate, 'toss'), true, '味方がトス');
+  eq(R.state === 'choose' && R.choose.scene, 'tossed');
+  choose(R, 'attack');
+  const ev2 = runFor(R, 4);
+  eq(hitBy(ev2, R.me, 'attack'), true, '自分がアタック');
+  eq(boomSide(ev2), 1);
+});
+
+test('③ でブロックを選ぶと、ネット際で跳ぶだけで爆弾には触らない', () => {
+  const R = newRally(zero);
+  startPoint(R, 1);
+  runUntilChoose(R, 4);
+  choose(R, 'receive');
+  runUntilChoose(R, 6);
+  choose(R, 'block');
+  const ev = runFor(R, 4);
+  eq(ev.some(e => e.type === 'hit' && e.actor === R.me), false);
+  eq(boomSide(ev) !== null, true, '爆発はする');
+});
+
+test('② 時間切れ（味方に任せる）なら味方がレシーブし、自分が自動でトスし、味方がアタックする', () => {
+  const R = newRally(zero);
+  startPoint(R, 1);
+  runUntilChoose(R, 4);
+  choose(R, null);
+  const ev = runFor(R, 6);
+  eq(hitBy(ev, R.mate, 'receive'), true, '味方がレシーブ');
+  eq(hitBy(ev, R.me, 'toss'), true, '自分が自動でトス');
+  eq(hitBy(ev, R.mate, 'attack'), true, '味方がアタック');
+  eq(boomSide(ev), 1);
+});
+
+test('② でサーブを選ぶと、その場で空振りし、味方がカバーしてレシーブする', () => {
+  const R = newRally(zero);
+  startPoint(R, 1);
+  runUntilChoose(R, 4);
+  choose(R, 'serve');
+  eq(R.me.task.kind, 'whiff');
+  const ev = runFor(R, 3);
+  eq(hitBy(ev, R.mate, 'receive'), true);
+});
+
+test('敵がトスを上げた瞬間に ②（アタックが来る）の選択になり、ブロックで止めて相手コートに落とせる', () => {
+  const R = newRally(zero);
+  R.openerIdx = 1;                                         // 敵の 2 番目の打ち方＝トスからアタック
+  startPoint(R, 1);
+  const c = R.events.find(e => e.type === 'choose');
+  eq(c && [c.scene, c.attack], ['incoming', true]);
+  choose(R, 'block');
+  const ev = runFor(R, 5);
+  eq(hitBy(ev, R.actors[3], 'attack'), true, '敵がアタック');
+  eq(hitBy(ev, R.me, 'block'), true, 'ブロックで止めた');
+  eq(boomSide(ev), 1);
+});
+
+test('爆発したら、取られた側のサーブで次が始まる', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  choose(R, 'serve');
+  runFor(R, 5 + CFG.afterBoom);                             // 相手コートで爆発 → 敵のサーブ
+  eq(R.actors[2].lastHit !== null || R.ball.held === R.actors[2], true);
 });
 
 // ===== 結果表示 =====

@@ -11,8 +11,26 @@
     touch-action:none;user-select:none;-webkit-user-select:none}
   canvas{display:block;width:100%;height:100%}
 
-  /* ---- 試し用の案内（Phase 1） ---- */
-  #hint{position:fixed;left:16px;bottom:16px;z-index:5;font-size:13px;opacity:.8;pointer-events:none;text-shadow:0 1px 6px #000}
+  /* ---- 操作の案内 ---- */
+  #hint{position:fixed;left:16px;top:14px;z-index:5;font-size:13px;opacity:.8;pointer-events:none;text-shadow:0 1px 6px #000}
+
+  /* ---- 4 つの行動ボタン（選ぶ場面だけ明るくなる） ---- */
+  #actions{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:6;
+    display:flex;flex-wrap:wrap;gap:8px 10px;width:min(640px,calc(100vw - 32px));opacity:.35;transition:opacity .15s;pointer-events:none}
+  #actions.on{opacity:1;pointer-events:auto}
+  #actions button{flex:1 1 0;min-width:0;padding:10px 4px;border:2px solid rgba(255,255,255,.55);border-radius:12px;
+    background:rgba(20,24,30,.72);color:#fff;font:700 clamp(14px,2.6vw,18px) var(--jp);letter-spacing:.06em;cursor:pointer;touch-action:manipulation}
+  #actions.on button{border-color:#ffd04a;background:rgba(60,44,10,.85)}
+  #actions button b{display:block;font-size:11px;font-weight:400;opacity:.7}
+  #actions button:active{transform:scale(.96)}
+  #timer{flex:0 0 100%;height:5px;background:rgba(255,255,255,.18);border-radius:3px;overflow:hidden}
+  #timer i{display:block;height:100%;width:0;background:#ffd04a}
+
+  /* ---- 選ぶ場面の文字 ---- */
+  #scene{position:fixed;left:50%;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 84px);transform:translateX(-50%);z-index:6;
+    font-size:clamp(16px,3vw,22px);font-weight:700;letter-spacing:.1em;text-shadow:0 2px 10px #000;white-space:nowrap;
+    opacity:0;transition:opacity .15s;pointer-events:none}
+  #scene.on{opacity:1}
 
   /* ---- お知らせ ---- */
   #toast{position:fixed;left:50%;top:22%;z-index:7;transform:translate(-50%,-50%);width:max-content;max-width:90vw;
@@ -27,7 +45,15 @@
 </style>
 </head>
 <body>
-<div id="hint">床をクリック（タップ）すると、反対側から爆弾が飛んでくる（試し用）／ Space でランダムな場所へ</div>
+<div id="hint">スローになったら 1〜4 キー（スマホはボタン）で次の行動を選ぶ</div>
+<div id="scene"></div>
+<div id="actions">
+  <button data-act="receive"><b>1</b>レシーブ</button>
+  <button data-act="attack"><b>2</b>アタック</button>
+  <button data-act="block"><b>3</b>ブロック</button>
+  <button data-act="serve"><b>4</b>サーブ</button>
+  <div id="timer"><i></i></div>
+</div>
 <div id="toast"></div>
 <div id="rotate">横画面にしてください</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -46,8 +72,30 @@ const CFG = {
     { team: 1, x: 5, z: -2 },  { team: 1, x: 5, z: 2 },
   ],
   explodeDelay: 0.25,                                     // 床に触れてから爆発するまでの「一瞬の間」（秒）
+  // ---- Phase 2：行動と選択 ----
+  slowScale: 0.15,                                        // 選ぶ間の時間の速さ
+  choiceTime: 2.5,                                        // 選べる時間（実時間・秒）。過ぎたら味方に任せる
+  afterBoom: 1.6,                                         // 爆発してから次のサーブまで（秒）
+  runSpeed: 7,                                            // 選手が走る速さ m/s
+  reach: 1.0,                                             // 爆弾に手が届く横の距離 m
+  jumpH: 0.9,                                             // アタック・ブロック・サーブで跳ぶ高さ m
+  contactH: { receive: 0.8, toss: 2.3, attack: 3.4, direct: 2.4, serve: 2.8 },   // 爆弾に触る高さ m
+  serveSpot: 9.5,                                         // サーブを打つ位置（ネットからの距離。エンドラインの 0.5m 外）
+  serveHold: 0.9,                                         // サーブ前に構える「真剣な間」（秒）
+  hardSpeed: 13,                                          // これより速い球は「強い球」（直接打ち返しにくい）
+  shots: {
+    pass: { toX: 2.0, apex: 5.5 },                        // レシーブ → ネットから 2m の自陣へ高く上げる
+    set: { toX: 1.2, apex: 6.0 },                         // トス → ネットから 1.2m のアタック位置へ
+    spikeSpeed: 17, serveApex: 4.2, returnApex: 5.0,
+  },
+  success: {                                              // 場面 × 行動の成功率（仕様書 3.3）
+    serve: { receive: 0.3, attack: 0.4, serve: 0.9 },
+    incoming: { receive: 0.9, directSoft: 0.7, directHard: 0.25, block: 0.6 },
+    tossed: { receive: 0.95, attack: 0.9 },
+  },
+  ai: { receive: 0.85, toss: 0.9, attack: 0.8, serve: 0.9 },
+  enemyOpeners: ['serve', 'attack'],                      // Phase 2 の試し：敵は サーブ → トスからアタック を交互に打つ
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
-  test: { apex: 7, fromX: 7, fromY: 2.6 },                // 試し投げ：反対側 x=±7、高さ 2.6m から、最高点 7m
 };
 // ===== 爆弾の物理（three.js 非依存） =====
 // 爆弾は床に触れたときだけ爆発する。天井・壁・ネット・選手には跳ね返るだけ。
@@ -147,6 +195,323 @@ function shotVelocity(from, to, apex) {
   const vy = Math.sqrt(2 * g * (top - from.y));
   const t = vy / g + Math.sqrt(2 * (top - r) / g);          // 上がる時間＋最高点から床までの時間
   return { x: (to.x - from.x) / t, y: vy, z: (to.z - from.z) / t };
+}
+
+// 爆弾を試しに動かして（選手は無視）、高さ h まで降りてきたときの位置と、今からの時間を返す。
+// 上りの途中で h を通っても数えない。先に床に触れるなら null
+function predictDescent(ball, h, maxT) {
+  const b = { pos: { ...ball.pos }, vel: { ...ball.vel }, live: true };
+  const dt = 1 / 120;
+  for (let t = 0; t < (maxT || 6); ) {
+    const hit = stepBall(b, dt, [], () => 0.5);
+    t += dt;
+    if (hit) return h <= CFG.ball.r + 0.05 ? { x: hit.x, z: hit.z, t } : null;   // 床の高さを聞かれたなら、床に触れた場所が答え（刻みの間に抜けるため）
+    if (b.vel.y < 0 && b.pos.y <= h) return { x: b.pos.x, z: b.pos.z, t };
+  }
+  return null;
+}
+
+// 強打：from から to（x, z の床）へ、横の速さ speed で叩き込む初速。
+// ネットの白帯にかかるなら、速さを落として（＝山なりにして）越えられる速さを探す
+function spikeVelocity(from, to, speed) {
+  const g = CFG.gravity, r = CFG.ball.r, N = CFG.net;
+  const dx = to.x - from.x, dz = to.z - from.z, dist = Math.hypot(dx, dz);
+  for (let s = speed; s >= 6; s -= 0.5) {
+    const t = dist / s;
+    const v = { x: dx / t, y: (r - from.y + 0.5 * g * t * t) / t, z: dz / t };
+    if (from.x * to.x >= 0) return v;                     // ネットを越えない打球は確かめない
+    const tc = -from.x / v.x;                             // ネットの真上を通る時刻
+    const yc = from.y + v.y * tc - 0.5 * g * tc * tc;
+    if (yc - r > N.top + 0.05) return v;
+  }
+  return shotVelocity(from, to, from.y + 1.5);            // どうしても越えないなら山なりで
+}
+// ===== 選手の動き（three.js 非依存） =====
+// actor = { id, team, x, z, y（跳んでいる高さ）, vy, home（仕事が無いとき戻る所）, base（定位置）, task, moving, lastHit }
+// task  = { kind, ok, contact, h, at, pending, jump, jumpAt, jumped, jumpOnArrive, whiff, end, then, target, hold, contactAt, start }
+function newActor(id, team, x, z) {
+  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null };
+}
+function dirOf(team) { return team === 0 ? 1 : -1; }      // 相手コートの向き（x の符号）
+function riseTime() { return Math.sqrt(2 * CFG.jumpH / CFG.gravity); }   // 踏み切ってから最高点まで
+
+// dt 進める。地上なら task.at（仕事が無ければ home）へ走る。jumpAt を過ぎたら跳ぶ
+function stepActor(a, dt, simT) {
+  const t = a.task;
+  if (a.y > 0) {
+    a.vy -= CFG.gravity * dt;
+    a.y += a.vy * dt;
+    if (a.y <= 0) { a.y = 0; a.vy = 0; }
+  }
+  const g = t ? t.at : a.home;
+  a.moving = false;
+  if (a.y === 0) {
+    const dx = g.x - a.x, dz = g.z - a.z, d = Math.hypot(dx, dz), step = CFG.runSpeed * dt;
+    if (d > 0.02) {
+      a.moving = true;
+      if (d <= step) { a.x = g.x; a.z = g.z; } else { a.x += dx / d * step; a.z += dz / d * step; }
+    }
+  }
+  if (t && t.jumpOnArrive && t.jumpAt == null && !a.moving) t.jumpAt = simT;
+  if (t && t.jumpAt != null && !t.jumped && simT >= t.jumpAt && a.y === 0) {
+    t.jumped = true;
+    a.vy = Math.sqrt(2 * CFG.gravity * CFG.jumpH);
+    a.y = 1e-4;
+  }
+}
+
+// 爆弾に触れたか。'hit' / 'miss' / null（まだ）
+function checkContact(a, ball) {
+  const t = a.task;
+  if (!t || !t.contact || t.pending || !ball.live || ball.held) return null;
+  const p = ball.pos;
+  if (t.kind === 'block') {                               // ネットの上で、空中の手に当たれば止める
+    if (t.ok && a.y > 0.3 && Math.abs(p.x) < 0.7 && Math.abs(p.z - a.z) < 0.9 && p.y > 2.2 && p.y < 2.5 + CFG.jumpH + 0.6) return 'hit';
+    if (p.x * dirOf(a.team) < -1.0) return 'miss';        // 自陣の奥へ抜けた
+    return null;
+  }
+  if (ball.vel.y > 0 || p.y > t.h) return null;           // まだ上にある
+  if (Math.hypot(p.x - a.x, p.z - a.z) <= CFG.reach) return t.whiff ? 'miss' : 'hit';
+  if (p.y < t.h - 0.6) return 'miss';
+  return null;
+}
+// ===== ラリーの流れ（three.js 非依存） =====
+// R.state: 'choose'（スローで選択中）/ 'play'（それ以外の試合中）/ 'boom'（床に触れたあと）
+// 選ぶ場面: 'serve' ①自分のサーブ番 / 'incoming' ②相手が打った（attack なら相手のトス＝アタックが来る）/ 'tossed' ③味方が自分にトスした
+// 描画側へは R.events に出来事を積む：choose / chosen / hit / miss / floor / explode
+const ACTIONS = ['receive', 'attack', 'block', 'serve'];
+
+function newRally(rand) {
+  const actors = CFG.startSpots.map((s, i) => newActor(i, s.team, s.x, s.z));
+  return {
+    state: 'play', simT: 0, ball: null, actors, me: actors[0], mate: actors[1],
+    choose: null, boom: null, awaiting: false, openerIdx: 0, events: [], rand: rand || Math.random,
+  };
+}
+function partnerOf(R, a) { return R.actors.find(o => o.team === a.team && o !== a); }
+function roll(R, p) { return R.rand() < p; }
+
+// 次の 1 点を始める。team が打つ（0 ならプレイヤー＝①の選択、1 なら敵。Phase 2 の敵はサーブとアタックを交互に）
+function startPoint(R, team) {
+  for (const a of R.actors) {
+    a.task = null; a.y = 0; a.vy = 0; a.lastHit = null;
+    a.home = { ...a.base }; a.x = a.base.x; a.z = a.base.z;
+  }
+  R.boom = null; R.choose = null; R.awaiting = false; R.state = 'play';
+  const server = team === 0 ? R.me : R.actors[2];
+  server.home = { x: -dirOf(team) * CFG.serveSpot, z: server.base.z * 0.5 };
+  server.x = server.home.x; server.z = server.home.z;
+  R.ball = newBall(server.x, 1.2, server.z);
+  R.ball.held = server;
+  if (team === 0) { openChoice(R, 'serve'); return; }
+  const kind = CFG.enemyOpeners[R.openerIdx++ % CFG.enemyOpeners.length];
+  if (kind === 'serve') giveServe(R, server, roll(R, CFG.ai.serve));
+  else enemyAttackOpener(R);
+}
+
+// Phase 2 の試し：敵の 1 人がネット際でトスを上げ、もう 1 人がアタックしてくる
+function enemyAttackOpener(R) {
+  const setter = R.actors[2], hitter = R.actors[3];
+  setter.home = { x: 2.5, z: 0 }; setter.x = 2.5; setter.z = 0;
+  R.ball = newBall(2.5, 2.3, 0);
+  R.ball.vel = shotVelocity(R.ball.pos, { x: CFG.shots.set.toX, z: hitter.base.z * 0.5 }, CFG.shots.set.apex);
+  setter.lastHit = { kind: 'toss', at: R.simT };
+  afterHit(R, setter, { kind: 'toss', ok: true });
+}
+
+function openChoice(R, scene, attack) {
+  R.state = 'choose';
+  R.choose = { scene, attack: !!attack, left: CFG.choiceTime };
+  R.events.push({ type: 'choose', scene, attack: !!attack });
+}
+
+// 爆弾がそのまま落ちると team の側か
+function headingTo(R, team) {
+  const l = predictDescent(R.ball, CFG.ball.r + 0.01);
+  return !!l && sideOf(l.x) === team;
+}
+
+// 仕事を渡す。爆弾がもう自分の側へ来ているなら、すぐ行き先を決める（来ていなければ pending のまま）
+function giveTask(R, a, kind, ok, extra) {
+  a.task = Object.assign({ kind, ok, contact: true, pending: true, at: { x: a.x, z: a.z }, start: R.simT }, extra);
+  const t = a.task;
+  if (t.contact && t.pending && headingTo(R, a.team)) aimTask(R, a);
+  return t;
+}
+
+// 落ちてくる場所を予測して行き先を決める。ネットを越えて相手側へは行かない
+function aimTask(R, a) {
+  const t = a.task, p = predictDescent(R.ball, t.h);
+  if (!p) return;
+  const G = CFG.gym;
+  let x = clamp(p.x, -G.halfX + 0.5, G.halfX - 0.5);
+  x = a.team === 0 ? Math.min(x, -0.4) : Math.max(x, 0.4);
+  t.at = { x, z: clamp(p.z, -G.halfZ + 0.5, G.halfZ - 0.5) };
+  t.pending = false;
+  t.contactAt = R.simT + p.t;
+  if (t.jump) t.jumpAt = t.contactAt - riseTime();
+}
+function retarget(R, team) {
+  for (const a of R.actors) if (a.team === team && a.task && a.task.pending && a.task.kind !== 'block') aimTask(R, a);
+}
+
+function giveServe(R, a, ok) {
+  const t = giveTask(R, a, 'serve', ok, { h: CFG.contactH.serve, pending: false, hold: R.simT + CFG.serveHold, jump: true });
+  t.jumpAt = t.hold + 0.3;
+}
+function giveReceive(R, a, ok) { return giveTask(R, a, 'receive', ok, { h: CFG.contactH.receive }); }
+function giveReturn(R, a, ok) { return giveTask(R, a, 'return', ok, { h: CFG.contactH.receive }); }
+function giveToss(R, a, target) { return giveTask(R, a, 'toss', roll(R, CFG.ai.toss), { h: CFG.contactH.toss, target }); }
+function giveAttack(R, a, ok, kind) {
+  const whiff = !ok && R.rand() < 0.5;                    // 失敗の半分は空振り、残りはネットにかける
+  return giveTask(R, a, kind || 'attack', ok, { h: kind === 'direct' ? CFG.contactH.direct : CFG.contactH.attack, jump: true, whiff });
+}
+// ブロック：相手のアタッカーの正面のネット際へ行き、打つ瞬間に合わせて跳ぶ
+function giveBlock(R, a, ok) {
+  const opp = R.actors.find(o => o.team !== a.team && o.task && (o.task.kind === 'attack' || o.task.kind === 'direct'));
+  const z = opp ? opp.task.at.z : R.ball.pos.z;
+  const t = giveTask(R, a, 'block', ok, { pending: false, at: { x: -dirOf(a.team) * 0.5, z: clamp(z, -4, 4) } });
+  if (opp && opp.task.contactAt != null) t.jumpAt = opp.task.contactAt - riseTime() + 0.05;
+  else t.jumpOnArrive = true;
+  return t;
+}
+// 場面に合わない動き：'blockNoop' はネット際で跳ぶだけ、'whiff' はその場でサーブの構えをして空振り
+function giveNoop(R, a, kind, then) {
+  if (kind === 'blockNoop') return giveTask(R, a, kind, false, { contact: false, pending: false, at: { x: -dirOf(a.team) * 0.5, z: a.z }, jumpOnArrive: true, then });
+  return giveTask(R, a, kind, false, { contact: false, pending: false, end: R.simT + 1.0, then });
+}
+
+// プレイヤーが選んだ（action が null なら時間切れ）
+function choose(R, action) {
+  if (R.state !== 'choose') return;
+  const sc = R.choose.scene, attack = R.choose.attack, me = R.me, mate = R.mate, P = CFG.success, b = R.ball;
+  R.choose = null; R.state = 'play';
+  R.events.push({ type: 'chosen', action, scene: sc });
+  if (sc === 'serve') {
+    if (action === 'serve' || action === null) giveServe(R, me, roll(R, P.serve.serve));
+    else if (action === 'block') giveNoop(R, me, 'blockNoop', () => openChoice(R, 'serve'));
+    else {                                                // その場で爆弾を放り上げ、レシーブかアタックで打つ
+      const d = dirOf(me.team);
+      b.held = null;
+      b.pos = { x: me.x + d * 0.3, y: 1.3, z: me.z };
+      b.vel = { x: 0, y: action === 'receive' ? 2.5 : 4, z: 0 };
+      giveTask(R, me, action === 'receive' ? 'bump' : 'standSpike', roll(R, P.serve[action]),
+        { h: action === 'receive' ? 0.9 : 1.9, pending: false });
+    }
+    return;
+  }
+  if (sc === 'incoming') {
+    R.awaiting = true;
+    if (action === 'receive') giveReceive(R, me, roll(R, P.incoming.receive));
+    else if (action === 'attack') {
+      const hard = attack || Math.hypot(b.vel.x, b.vel.y, b.vel.z) > CFG.hardSpeed;
+      giveAttack(R, me, roll(R, hard ? P.incoming.directHard : P.incoming.directSoft), 'direct');
+    } else {
+      if (action === 'block') giveBlock(R, me, attack && roll(R, P.incoming.block));
+      else if (action === 'serve') giveNoop(R, me, 'whiff');
+      giveReceive(R, mate, roll(R, CFG.ai.receive));      // 空いた所は味方がカバー（時間切れも同じ）
+    }
+    return;
+  }
+  // 'tossed'
+  if (action === 'attack') giveAttack(R, me, roll(R, P.tossed.attack));
+  else if (action === 'receive') giveReturn(R, me, roll(R, P.tossed.receive));
+  else if (action === 'block') giveNoop(R, me, 'blockNoop');
+  else if (action === 'serve') giveNoop(R, me, 'whiff');
+  else giveReturn(R, mate, roll(R, CFG.ai.receive));      // 時間切れ：味方が返す
+}
+
+// 打った球の初速。成功なら狙いどおり、失敗なら笑える方向へ
+function shotFor(R, a, t) {
+  const d = dirOf(a.team), p = R.ball.pos, rnd = R.rand, S = CFG.shots, W = CFG.court.halfWid - 0.7;
+  const from = { x: p.x, y: p.y, z: p.z };
+  const opp = (x0, x1) => ({ x: d * (x0 + rnd() * (x1 - x0)), z: (rnd() * 2 - 1) * W });   // 相手コートのネットから x0〜x1 m
+  const shank = () => shotVelocity(from, { x: -d * (9.5 + rnd() * 3), z: (rnd() * 2 - 1) * 7 }, from.y + 1.5 + rnd() * 2);   // 自陣の後ろへ弾く
+  const intoNet = () => { const dx = -p.x, dy = 1.7 - p.y, n = Math.hypot(dx, dy) || 1; return { x: dx / n * 14, y: dy / n * 14, z: 0 }; };
+  switch (t.kind) {
+    case 'receive': return t.ok ? shotVelocity(from, { x: -d * S.pass.toX, z: 0 }, S.pass.apex) : shank();
+    case 'toss':
+      return t.ok ? shotVelocity(from, { x: -d * S.set.toX, z: clamp(t.target.z, -3.5, 3.5) }, S.set.apex)
+                  : shotVelocity(from, { x: -d * 0.3, z: p.z }, from.y + 0.8);          // 低いトスでネット際に落ちる
+    case 'attack': case 'direct': case 'standSpike':
+      return t.ok ? spikeVelocity(from, opp(4.5, 8.5), S.spikeSpeed) : intoNet();
+    case 'block': return spikeVelocity(from, opp(1.5, 4), 10);
+    case 'return': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shank();
+    case 'bump': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shotVelocity(from, { x: p.x - d * 0.6, z: p.z + 0.4 }, from.y + 1.2);   // 足元に落とす
+    case 'serve': return t.ok ? shotVelocity(from, opp(3, 8.5), S.serveApex) : shotVelocity(from, { x: -d * 0.6, z: p.z * 0.5 }, from.y + 0.3);   // ネットに届かない
+  }
+  return { x: 0, y: 0, z: 0 };
+}
+
+// 打ったあと：レシーブ → 相方がトス、トス → 相方（レシーブした人）がアタック。相手側へ飛んだら相手の pending を決める
+function afterHit(R, a, t) {
+  const partner = partnerOf(R, a);
+  if (a.team === 0) R.awaiting = false;
+  if (t.ok && t.kind === 'receive') giveToss(R, partner, a);
+  if (t.ok && t.kind === 'toss') {
+    if (partner === R.me) openChoice(R, 'tossed');
+    else giveAttack(R, partner, roll(R, CFG.ai.attack));
+    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', true);   // 敵のトス＝アタックが来る
+  }
+  if (!headingTo(R, a.team)) {
+    retarget(R, 1 - a.team);
+    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false);
+  }
+}
+
+function resolveContact(R, a, c) {
+  const t = a.task;
+  a.task = null;
+  a.home = { ...a.base };                                 // サーブを打ったら定位置へ戻る
+  if (c === 'miss') { R.events.push({ type: 'miss', actor: a, kind: t.kind }); return; }
+  a.lastHit = { kind: t.kind, at: R.simT };
+  R.ball.vel = shotFor(R, a, t);
+  R.events.push({ type: 'hit', actor: a, kind: t.kind, ok: t.ok });
+  afterHit(R, a, t);
+}
+
+function onFloor(R, hit) {
+  for (const a of R.actors) a.task = null;
+  R.state = 'boom'; R.choose = null;
+  R.boom = { t: 0, hit, fired: false };
+  R.events.push({ type: 'floor', x: hit.x, z: hit.z, side: hit.side });
+}
+
+// realDt（実時間）進める。選択中はゲームの時間を slowScale 倍にする
+function tickRally(R, realDt) {
+  const dt = R.state === 'choose' ? realDt * CFG.slowScale : realDt;
+  if (R.state === 'choose') R.choose.left -= realDt;
+  R.simT += dt;
+  for (const a of R.actors) stepActor(a, dt, R.simT);
+  for (const a of R.actors) {                             // 爆弾に触らない動き（空振り・跳ぶだけ）の終わり
+    const t = a.task;
+    if (!t || t.contact) continue;
+    if (t.end != null ? R.simT >= t.end : (t.jumped && a.y === 0)) { a.task = null; if (t.then) t.then(); }
+  }
+  const b = R.ball;
+  if (b && b.held) {
+    const a = b.held, d = dirOf(a.team), t = a.task;
+    b.pos = { x: a.x + d * 0.35, y: a.y + 1.15, z: a.z };
+    if (t && t.kind === 'serve' && R.simT >= t.hold) {    // 構えの間が終わったらトスを上げる
+      b.held = null;
+      b.pos = { x: a.x + d * 0.3, y: 2.0, z: a.z };
+      b.vel = { x: d * 0.4, y: 4.5, z: 0 };
+    }
+  } else if (b && b.live) {
+    for (const a of R.actors) { const c = checkContact(a, b); if (c) resolveContact(R, a, c); }
+    const colliders = R.actors.filter(a => !(a.task && a.task.contact) && !(a.lastHit && R.simT - a.lastHit.at < 0.4)).map(a => ({ x: a.x, z: a.z }));   // 打とうとしている人・打ったばかりの人には当たらない（打った球を自分の体で弾かない）
+    const hit = stepBall(b, dt, colliders, R.rand);
+    if (hit) onFloor(R, hit);
+  }
+  if (R.state === 'choose' && R.choose.left <= 0) choose(R, null);   // 時間切れ：味方に任せる
+  if (R.state === 'boom') {
+    R.boom.t += realDt;
+    if (!R.boom.fired && R.boom.t >= CFG.explodeDelay) {
+      R.boom.fired = true;
+      R.events.push({ type: 'explode', x: R.boom.hit.x, z: R.boom.hit.z, side: R.boom.hit.side });
+    }
+    if (R.boom.t >= CFG.explodeDelay + CFG.afterBoom) startPoint(R, R.boom.hit.side);   // 取られた側のサーブ
+  }
 }
 // ===== 体育館・コート・ネット・光 =====
 function buildGym(scene) {
@@ -283,10 +648,20 @@ function lookAtTarget(pl, target, dt) {
   pl.j.spine.rotation.y += pl.look.yaw * 0.3;
 }
 
-// Phase 1：構えたまま小さく揺れ、focus（爆弾）を目で追う
-function updatePlayer(pl, dt, t, focus) {
-  applyPose(pl, POSES.ready);
-  pl.j.hips.position.y += Math.sin(t * 3 + pl.phase) * 0.012;
+// 選手の見た目を actor（15-actors.js）に合わせる。ポーズは目標へなめらかに寄せ、focus（爆弾）を目で追う
+function updatePlayer(pl, a, dt, simT, focus) {
+  const target = poseFor(a, simT);
+  if (!pl.cur) pl.cur = { hipsDrop: 0 };
+  const k = Math.min(1, dt * 14);
+  for (const name of JOINTS) {
+    const to = target[name] || [0, 0, 0];
+    const c = pl.cur[name] || (pl.cur[name] = [0, 0, 0]);
+    for (let i = 0; i < 3; i++) c[i] += (to[i] - c[i]) * k;
+  }
+  pl.cur.hipsDrop += ((target.hipsDrop || 0) - pl.cur.hipsDrop) * k;
+  applyPose(pl, pl.cur);
+  pl.root.position.set(a.x, a.y, a.z);
+  if (!a.moving && a.y === 0 && !a.task) pl.j.hips.position.y += Math.sin(simT * 3 + pl.phase) * 0.012;   // 構えたまま小さく揺れる
   lookAtTarget(pl, focus, dt);
 }
 // ===== 爆弾の見た目（黒い球にバレーボールの縫い目、口金と導火線）と床の影 =====
@@ -349,7 +724,100 @@ const POSES = {
     hipL: [-0.5, 0, 0.05], kneeL: [1.0, 0, 0],
     hipR: [-0.5, 0, -0.05], kneeR: [1.0, 0, 0],
   },
+  run1: {                                                 // 走る（左脚が前）
+    hipsDrop: 0.05,
+    spine: [0.3, 0, 0], neck: [-0.2, 0, 0],
+    shoulderL: [0.7, 0, 0.1], elbowL: [-1.3, 0, 0],
+    shoulderR: [-0.9, 0, -0.1], elbowR: [-1.3, 0, 0],
+    hipL: [-0.9, 0, 0], kneeL: [0.6, 0, 0],
+    hipR: [0.4, 0, 0], kneeR: [1.3, 0, 0],
+  },
+  receive: {                                              // レシーブ：深く腰を落とし、両腕を組んで前へ伸ばす
+    hipsDrop: 0.2,
+    spine: [0.5, 0, 0], neck: [-0.4, 0, 0],
+    shoulderL: [-1.0, 0, -0.28], elbowL: [0, 0, 0],
+    shoulderR: [-1.0, 0, 0.28], elbowR: [0, 0, 0],
+    hipL: [-0.8, 0, 0.15], kneeL: [1.4, 0, 0],
+    hipR: [-0.8, 0, -0.15], kneeR: [1.4, 0, 0],
+  },
+  toss: {                                                 // トス：額の前で両手を開く
+    hipsDrop: 0.05,
+    spine: [-0.1, 0, 0], neck: [0.2, 0, 0],
+    shoulderL: [-2.6, 0, 0.3], elbowL: [-1.1, 0, 0],
+    shoulderR: [-2.6, 0, -0.3], elbowR: [-1.1, 0, 0],
+    hipL: [-0.25, 0, 0.05], kneeL: [0.45, 0, 0],
+    hipR: [-0.25, 0, -0.05], kneeR: [0.45, 0, 0],
+  },
+  jump: {                                                 // 空中：両腕を上げ、膝を軽くたたむ
+    spine: [0, 0, 0],
+    shoulderL: [-2.8, 0, 0.2], elbowL: [-0.3, 0, 0],
+    shoulderR: [-2.8, 0, -0.2], elbowR: [-0.3, 0, 0],
+    hipL: [-0.3, 0, 0], kneeL: [0.6, 0, 0],
+    hipR: [-0.3, 0, 0], kneeR: [0.6, 0, 0],
+  },
+  spikeBack: {                                            // スパイクの振りかぶり：背中を反らし、右手を頭の後ろへ
+    spine: [-0.35, 0.3, 0], neck: [0.2, 0, 0],
+    shoulderL: [-2.6, 0, 0.2], elbowL: [-0.3, 0, 0],
+    shoulderR: [-2.9, 0, -0.2], elbowR: [-1.7, 0, 0],
+    hipL: [-0.5, 0, 0], kneeL: [1.0, 0, 0],
+    hipR: [-0.2, 0, 0], kneeR: [1.1, 0, 0],
+  },
+  spikeHit: {                                             // 振り下ろし：体をたたみ、右腕を前へ
+    spine: [0.5, -0.3, 0], neck: [-0.3, 0, 0],
+    shoulderL: [-0.4, 0, 0.3], elbowL: [-0.6, 0, 0],
+    shoulderR: [-1.0, 0, -0.1], elbowR: [-0.2, 0, 0],
+    hipL: [-0.6, 0, 0], kneeL: [0.9, 0, 0],
+    hipR: [-0.4, 0, 0], kneeR: [0.7, 0, 0],
+  },
+  block: {                                                // ブロック：両腕をまっすぐ上へ
+    spine: [0.05, 0, 0],
+    shoulderL: [-3.0, 0, 0.12], elbowL: [0, 0, 0],
+    shoulderR: [-3.0, 0, -0.12], elbowR: [0, 0, 0],
+    hipL: [-0.1, 0, 0], kneeL: [0.2, 0, 0],
+    hipR: [-0.1, 0, 0], kneeR: [0.2, 0, 0],
+  },
+  serveHold: {                                            // サーブの構え：左手で爆弾を前に持ち、じっと狙う
+    spine: [0.1, 0, 0], neck: [-0.1, 0, 0],
+    shoulderL: [-1.2, 0, 0], elbowL: [-0.6, 0, 0],
+    shoulderR: [-0.3, 0, -0.15], elbowR: [-0.5, 0, 0],
+    hipL: [-0.2, 0, 0.05], kneeL: [0.3, 0, 0],
+    hipR: [0.15, 0, -0.05], kneeR: [0.2, 0, 0],
+  },
 };
+
+POSES.run2 = mirrorPose(POSES.run1);                      // 走る（右脚が前）
+
+// 左右を入れ替えたポーズ（L ↔ R。ry と rz は向きが逆になる）
+function mirrorPose(p) {
+  const out = { hipsDrop: p.hipsDrop };
+  for (const k in p) {
+    if (k === 'hipsDrop') continue;
+    const m = k.endsWith('L') ? k.slice(0, -1) + 'R' : k.endsWith('R') ? k.slice(0, -1) + 'L' : k;
+    out[m] = [p[k][0], -p[k][1], -p[k][2]];
+  }
+  return out;
+}
+
+const HIT_POSE = { receive: 'receive', bump: 'receive', return: 'receive', toss: 'toss',
+  attack: 'spikeHit', direct: 'spikeHit', standSpike: 'spikeHit', serve: 'spikeHit', block: 'block' };
+const WAIT_POSE = { receive: 'receive', bump: 'receive', return: 'receive', toss: 'toss', serve: 'serveHold' };
+
+// 選手の状態（15-actors.js の actor）から、今とるべきポーズを選ぶ
+function poseFor(a, simT) {
+  const t = a.task;
+  const recent = a.lastHit && simT - a.lastHit.at < 0.45;   // 打った直後はその形を残す
+  if (a.y > 0) {
+    if (t && (t.kind === 'block' || t.kind === 'blockNoop')) return POSES.block;
+    if (recent) return POSES[HIT_POSE[a.lastHit.kind]] || POSES.jump;
+    if (t && t.jump) return POSES.spikeBack;
+    return POSES.jump;
+  }
+  if (recent) return POSES[HIT_POSE[a.lastHit.kind]] || POSES.ready;
+  if (a.moving) return Math.sin(simT * 14 + a.id) > 0 ? POSES.run1 : POSES.run2;
+  if (t && t.kind === 'whiff') return simT - t.start < 0.35 ? POSES.spikeBack : POSES.spikeHit;
+  if (t && WAIT_POSE[t.kind]) return POSES[WAIT_POSE[t.kind]];
+  return POSES.ready;
+}
 // ===== 爆発（Phase 1 は火の玉と爆風の輪。本格的な演出は Phase 4） =====
 const FX = { scene: null, light: null, list: [], shake: 0 };
 const FX_LIFE = 0.9;                                      // 秒
@@ -406,21 +874,16 @@ function updateCamera(dt, focusX) {
   CAM.cam.position.set(CAM.x + (Math.random() - 0.5) * s, c.y + (Math.random() - 0.5) * s, c.z);
   CAM.cam.lookAt(CAM.x, c.lookY, 0);
 }
-// ===== 入力（Phase 1 は試し用：床をクリック・タップすると爆弾が飛んでくる。Space でランダムな場所へ） =====
-function initInput(canvas, camera, onFloor) {
-  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
-  const floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
-  canvas.addEventListener('pointerdown', e => {
-    ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-    if (ray.ray.intersectPlane(floor, hit)) onFloor(hit.x, hit.z);
-  });
-  addEventListener('keydown', e => {
-    if (e.code !== 'Space') return;
-    e.preventDefault();
-    const C = CFG.court;
-    onFloor((Math.random() * 2 - 1) * C.halfLen, (Math.random() * 2 - 1) * C.halfWid);
-  });
+// ===== 入力：4 つの行動ボタン（スマホはタップ）と 1〜4 キー =====
+function initInput(onAction) {
+  for (const btn of document.querySelectorAll('#actions button')) {
+    btn.addEventListener('pointerdown', e => { e.preventDefault(); onAction(btn.dataset.act); });
+  }
+  const keys = {
+    Digit1: 'receive', Digit2: 'attack', Digit3: 'block', Digit4: 'serve',
+    Numpad1: 'receive', Numpad2: 'attack', Numpad3: 'block', Numpad4: 'serve',
+  };
+  addEventListener('keydown', e => { if (keys[e.code]) onAction(keys[e.code]); });
 }
 // ===== 画面の文字 =====
 let __toastTimer = 0;
@@ -430,6 +893,22 @@ function showToast(text, sec) {
   el.classList.add('on');
   clearTimeout(__toastTimer);
   __toastTimer = setTimeout(() => el.classList.remove('on'), (sec || 1.6) * 1000);
+}
+
+const SCENE_TEXT = { serve: 'サーブ番', incoming: '相手が打った！', tossed: 'トスが上がった！' };
+function showChoice(scene, attack) {
+  document.getElementById('actions').classList.add('on');
+  const el = document.getElementById('scene');
+  el.textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
+  el.classList.add('on');
+}
+function hideChoice() {
+  document.getElementById('actions').classList.remove('on');
+  document.getElementById('scene').classList.remove('on');
+  setTimer(0);
+}
+function setTimer(frac) {
+  document.querySelector('#timer i').style.width = (Math.max(0, Math.min(1, frac)) * 100) + '%';
 }
 // ===== 起動とメインループ =====
 (function boot() {
@@ -446,27 +925,15 @@ function showToast(text, sec) {
   const camera = new THREE.PerspectiveCamera(CFG.camera.fov, innerWidth / innerHeight, 0.1, 200);
   CAM.cam = camera;
 
-  // 選手 4 人（Phase 1 は定位置で構えるだけ）。爆弾の当たり判定には足元の位置を渡す
-  const players = CFG.startSpots.map(s => {
-    const pl = makePlayer(scene, s.team);
-    placePlayer(pl, s.x, s.z);
+  const R = newRally();
+  const players = R.actors.map(a => {
+    const pl = makePlayer(scene, a.team);
+    placePlayer(pl, a.x, a.z);                            // 向き（ネットのほう）を決める
     return pl;
   });
-  const colliders = CFG.startSpots.map(s => ({ x: s.x, z: s.z }));
-
   const bombMesh = makeBombMesh(scene);
-  let ball = null;      // 今の爆弾（無ければ null）
-  let boom = null;      // 床に触れてからの待ち { t, hit, fired }
-
-  // 試し投げ：狙った地点の反対側のコートから投げ込む
-  function throwTo(x, z) {
-    if (boom) return;                                     // 爆発が終わるまでは投げない
-    const from = { x: x < 0 ? CFG.test.fromX : -CFG.test.fromX, y: CFG.test.fromY, z: z * 0.3 };
-    ball = newBall(from.x, from.y, from.z);
-    ball.vel = shotVelocity(from, { x, z }, CFG.test.apex);
-  }
-  initInput(renderer.domElement, camera, throwTo);
-  window.GAME = { scene, players, colliders, throwTo, get ball() { return ball; } };   // 確認用
+  initInput(act => choose(R, act));
+  window.GAME = { R, choose: act => choose(R, act) };     // 確認用
 
   addEventListener('resize', () => {
     renderer.setSize(innerWidth, innerHeight);
@@ -474,31 +941,29 @@ function showToast(text, sec) {
     camera.updateProjectionMatrix();
   });
 
+  startPoint(R, 0);                                       // 最初のサーブはプレイヤーのチーム
   const clock = new THREE.Clock();
-  let t = 0;
   function frame() {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 1 / 30);
-    t += dt;
-    if (ball && ball.live) {
-      const hit = stepBall(ball, dt, colliders);
-      if (hit) boom = { t: 0, hit, fired: false };
-    }
-    if (boom) {
-      boom.t += dt;
-      if (!boom.fired && boom.t >= CFG.explodeDelay) {   // 一瞬の間をおいて爆発
-        boom.fired = true;
-        ball = null;
-        spawnExplosion(boom.hit.x, boom.hit.z);
-        showToast(boom.hit.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
+    tickRally(R, dt);
+    for (const e of R.events) {
+      if (e.type === 'choose') showChoice(e.scene, e.attack);
+      else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
+      else if (e.type === 'explode') {
+        spawnExplosion(e.x, e.z);
+        showToast(e.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
       }
-      if (boom.t >= CFG.explodeDelay + 1.2) boom = null;
     }
-    const focus = ball ? ball.pos : { x: 0, y: 3, z: 0 };
-    for (const pl of players) updatePlayer(pl, dt, t, focus);
-    updateBombMesh(bombMesh, ball, dt);
+    R.events.length = 0;
+    if (R.state === 'choose') setTimer(R.choose.left / CFG.choiceTime);
+    const slow = R.state === 'choose' ? CFG.slowScale : 1;
+    const shown = R.ball && !(R.state === 'boom' && R.boom.fired) ? R.ball : null;   // 爆発したら爆弾を消す
+    const focus = R.ball ? R.ball.pos : { x: 0, y: 3, z: 0 };
+    R.actors.forEach((a, i) => updatePlayer(players[i], a, dt, R.simT, focus));
+    updateBombMesh(bombMesh, shown, dt * slow);
     updateFx(dt);
-    updateCamera(dt, ball ? ball.pos.x : 0);
+    updateCamera(dt, R.ball ? R.ball.pos.x : 0);
     renderer.render(scene, camera);
   }
   frame();

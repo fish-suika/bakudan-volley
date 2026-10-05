@@ -72,9 +72,19 @@ function lookAtTarget(pl, target, dt) {
   pl.j.spine.rotation.y += pl.look.yaw * 0.3;
 }
 
-// Phase 1：構えたまま小さく揺れ、focus（爆弾）を目で追う
-function updatePlayer(pl, dt, t, focus) {
-  applyPose(pl, POSES.ready);
-  pl.j.hips.position.y += Math.sin(t * 3 + pl.phase) * 0.012;
+// 選手の見た目を actor（15-actors.js）に合わせる。ポーズは目標へなめらかに寄せ、focus（爆弾）を目で追う
+function updatePlayer(pl, a, dt, simT, focus) {
+  const target = poseFor(a, simT);
+  if (!pl.cur) pl.cur = { hipsDrop: 0 };
+  const k = Math.min(1, dt * 14);
+  for (const name of JOINTS) {
+    const to = target[name] || [0, 0, 0];
+    const c = pl.cur[name] || (pl.cur[name] = [0, 0, 0]);
+    for (let i = 0; i < 3; i++) c[i] += (to[i] - c[i]) * k;
+  }
+  pl.cur.hipsDrop += ((target.hipsDrop || 0) - pl.cur.hipsDrop) * k;
+  applyPose(pl, pl.cur);
+  pl.root.position.set(a.x, a.y, a.z);
+  if (!a.moving && a.y === 0 && !a.task) pl.j.hips.position.y += Math.sin(simT * 3 + pl.phase) * 0.012;   // 構えたまま小さく揺れる
   lookAtTarget(pl, focus, dt);
 }
