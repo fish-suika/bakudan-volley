@@ -444,7 +444,7 @@ test('相手に点を取られたら、相手がサーブする', () => {
   eq(R.choose && R.choose.scene, 'incoming');
 });
 
-test('3 点目で試合が終わり、newGame で 0-0 から自分のサーブで始まる', () => {
+test('3 点目で試合が終わり、newGame で 0-0 から始まる（rand が 0 なら自分のサーブ）', () => {
   const R = quietRally();
   startPoint(R, 0);
   let ev = [];
@@ -886,6 +886,14 @@ test('ジャンプサーブ：エンドラインの外から助走し、ライ�
   eq(hit !== null && hit.x > -CFG.court.halfLen, true, 'コートの中の空中で打つ');
   near(hit.y, CFG.contactH.serve, 0.3, '打つ高さ');
   eq(boomSide(ev), 1);
+});
+
+test('先攻はランダム：rand が 0.5 未満なら自分たち、0.5 以上なら相手が最初にサーブする', () => {
+  const R1 = newRally(() => 0.2); R1.idle[1] = true; newGame(R1);
+  eq([R1.ball.held === R1.me, R1.state, R1.choose && R1.choose.scene], [true, 'choose', 'serve']);
+  const R2 = newRally(() => 0.7); R2.idle[1] = true; newGame(R2);
+  eq([R2.ball.held.team, R2.state], [1, 'play']);
+  eq(R2.actors[2].task && R2.actors[2].task.kind, 'serve');
 });
 
 // ===== 結果表示 =====

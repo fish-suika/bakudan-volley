@@ -174,7 +174,7 @@ const CFG = {
     takeoffX: 9.15,                                       // 踏み切る位置（ネットからの距離）。エンドラインの 0.15m 手前
     contactIn: 0.8,                                       // 打つ所（エンドラインからコートの中へ m）
     approachDelay: 0.2,                                   // トスを上げてから助走を始めるまで（秒）
-    speed: 15,                                            // 打球の速さ m/s（ネットにかかるなら自動で遅くなる）
+    speed: 10,                                            // 打球の速さ m/s（ネットにかかるなら自動で遅くなる）。15 だとサーブで決まる点が 4 割近くあったので下げた
   },
   serveHold: 0.9,                                         // サーブ前に構える「真剣な間」（秒）
   hardSpeed: 13,                                          // これより速い球は「強い球」（直接打ち返しにくい）
@@ -521,7 +521,7 @@ function serveSpotOf(a) { return { x: -dirOf(a.team) * CFG.serveSpot, z: a.base.
 function newGame(R) {
   R.score = [0, 0]; R.winner = null;
   for (const a of R.actors) a.soot = false;
-  startPoint(R, 0);
+  startPoint(R, R.rand() < 0.5 ? 0 : 1);                  // 先攻（最初のサーブ）はランダム
 }
 
 // 全員を定位置に置いて、すぐ team のサーブを始める（試合の最初とテスト用）
@@ -2044,7 +2044,8 @@ function setTitle(on) {
     titleOn = false; replay = null; pendingResult = null; lastBoom = null;
     setTitle(false); setReplayTag(false); hideResult(); hideChoice();
     clearDecals();
-    newGame(R);                                           // 積まれた①の選択は、次のフレームでボタンに出る
+    newGame(R);                                           // 先攻はランダム。味方なら積まれた①の選択が、次のフレームでボタンに出る
+    showToast(R.ball.held.team === 0 ? '先攻：味方チームのサーブ' : '先攻：相手チームのサーブ', 1.8);
     setScore(R.score);
   }
   // タイトルへ：後ろで AI どうしの試合を流す

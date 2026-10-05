@@ -39,7 +39,8 @@
     titleOn = false; replay = null; pendingResult = null; lastBoom = null;
     setTitle(false); setReplayTag(false); hideResult(); hideChoice();
     clearDecals();
-    newGame(R);                                           // 積まれた①の選択は、次のフレームでボタンに出る
+    newGame(R);                                           // 先攻はランダム。味方なら積まれた①の選択が、次のフレームでボタンに出る
+    showToast(R.ball.held.team === 0 ? '先攻：味方チームのサーブ' : '先攻：相手チームのサーブ', 1.8);
     setScore(R.score);
   }
   // タイトルへ：後ろで AI どうしの試合を流す

@@ -59,7 +59,7 @@ function serveSpotOf(a) { return { x: -dirOf(a.team) * CFG.serveSpot, z: a.base.
 function newGame(R) {
   R.score = [0, 0]; R.winner = null;
   for (const a of R.actors) a.soot = false;
-  startPoint(R, 0);
+  startPoint(R, R.rand() < 0.5 ? 0 : 1);                  // 先攻（最初のサーブ）はランダム
 }
 
 // 全員を定位置に置いて、すぐ team のサーブを始める（試合の最初とテスト用）

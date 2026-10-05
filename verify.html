@@ -48,7 +48,7 @@ const CFG = {
     takeoffX: 9.15,                                       // 踏み切る位置（ネットからの距離）。エンドラインの 0.15m 手前
     contactIn: 0.8,                                       // 打つ所（エンドラインからコートの中へ m）
     approachDelay: 0.2,                                   // トスを上げてから助走を始めるまで（秒）
-    speed: 15,                                            // 打球の速さ m/s（ネットにかかるなら自動で遅くなる）
+    speed: 10,                                            // 打球の速さ m/s（ネットにかかるなら自動で遅くなる）。15 だとサーブで決まる点が 4 割近くあったので下げた
   },
   serveHold: 0.9,                                         // サーブ前に構える「真剣な間」（秒）
   hardSpeed: 13,                                          // これより速い球は「強い球」（直接打ち返しにくい）
@@ -395,7 +395,7 @@ function serveSpotOf(a) { return { x: -dirOf(a.team) * CFG.serveSpot, z: a.base.
 function newGame(R) {
   R.score = [0, 0]; R.winner = null;
   for (const a of R.actors) a.soot = false;
-  startPoint(R, 0);
+  startPoint(R, R.rand() < 0.5 ? 0 : 1);                  // 先攻（最初のサーブ）はランダム
 }
 
 // 全員を定位置に置いて、すぐ team のサーブを始める（試合の最初とテスト用）
@@ -1723,7 +1723,7 @@ test('相手に点を取られたら、相手がサーブする', () => {
   eq(R.choose && R.choose.scene, 'incoming');
 });
 
-test('3 点目で試合が終わり、newGame で 0-0 から自分のサーブで始まる', () => {
+test('3 点目で試合が終わり、newGame で 0-0 から始まる（rand が 0 なら自分のサーブ）', () => {
   const R = quietRally();
   startPoint(R, 0);
   let ev = [];
@@ -2165,6 +2165,14 @@ test('ジャンプサーブ：エンドラインの外から助走し、ライ�
   eq(hit !== null && hit.x > -CFG.court.halfLen, true, 'コートの中の空中で打つ');
   near(hit.y, CFG.contactH.serve, 0.3, '打つ高さ');
   eq(boomSide(ev), 1);
+});
+
+test('先攻はランダム：rand が 0.5 未満なら自分たち、0.5 以上なら相手が最初にサーブする', () => {
+  const R1 = newRally(() => 0.2); R1.idle[1] = true; newGame(R1);
+  eq([R1.ball.held === R1.me, R1.state, R1.choose && R1.choose.scene], [true, 'choose', 'serve']);
+  const R2 = newRally(() => 0.7); R2.idle[1] = true; newGame(R2);
+  eq([R2.ball.held.team, R2.state], [1, 'play']);
+  eq(R2.actors[2].task && R2.actors[2].task.kind, 'serve');
 });
 
 // ===== 結果表示 =====
