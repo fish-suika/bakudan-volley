@@ -325,6 +325,15 @@ test('① ブロックを選ぶと、爆弾を持ったままネット際で跳�
   eq(ev.some(e => e.type === 'choose' && e.scene === 'serve'), true);
   eq(R.ball.held === R.me, true);
   eq(ev.some(e => e.type === 'explode'), false);
+  near(Math.hypot(R.me.x - serveSpotOf(R.me).x, R.me.z - serveSpotOf(R.me).z), 0, 0.05, 'サーブの位置に戻ってから選ぶ');
+});
+
+test('サーブ：サーブの位置にいなくても、まずサーブの位置へ戻ってから助走する', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  R.me.x = -6; R.me.z = 2;                                 // 定位置から離れた所で選んだ
+  choose(R, 'serve');
+  eq(R.me.task.approachSpot, serveSpotOf(R.me));
 });
 
 test('相手のサーブにもブロックとアタックを選べる：ブロックは空振りで味方がカバー、アタックは直接打ち返しに行く', () => {

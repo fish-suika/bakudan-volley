@@ -513,7 +513,7 @@ function startPoint(R, team) {
 
 // その場からサーブを始める。0 ならプレイヤーの①の選択、1 なら敵がサーブ（2 人が交代で打つ）
 function startServe(R, team) {
-  R.boom = null; R.choose = null; R.awaiting = false; R.state = 'play';
+  R.boom = null; R.choose = null; R.awaiting = false; R.reserve = false; R.state = 'play';
   const s = serverOf(R, team);
   R.ball = newBall(s.x, 1.2, s.z);
   R.ball.held = s;
@@ -586,10 +586,11 @@ function serveToss(a) {
 function giveServe(R, a, ok) {
   const J = CFG.jumpServe, d = dirOf(a.team);
   const t = giveTask(R, a, 'serve', ok, { h: CFG.contactH.serve, pending: false, hold: R.simT + CFG.serveHold, jump: true });
-  t.approachSpot = { x: a.x, z: a.z };
+  const spot = serveSpotOf(a);                            // サーブの位置から助走する（そこにいなければ、まず戻る）
+  t.approachSpot = spot;
   t.approachStart = t.hold + J.approachDelay;
-  t.takeoff = { x: -d * J.takeoffX, z: a.z };
-  t.at = { x: -d * (CFG.court.halfLen - J.contactIn), z: a.z };
+  t.takeoff = { x: -d * J.takeoffX, z: spot.z };
+  t.at = { x: -d * (CFG.court.halfLen - J.contactIn), z: spot.z };
   t.jumpAt = t.hold + J.tossTime - riseTime();
 }
 function giveReceive(R, a, ok) { return giveTask(R, a, 'receive', ok, { h: CFG.contactH.receive }); }
@@ -628,7 +629,7 @@ function choose(R, action) {
   R.events.push({ type: 'chosen', action, scene: sc });
   if (sc === 'serve') {
     if (action === 'serve' || action === null) giveServe(R, me, roll(R, P.serve.serve));
-    else if (action === 'block') giveNoop(R, me, 'blockNoop', () => openChoice(R, 'serve'));   // 爆弾を持ったままネット際で跳び、戻ってもう一度選ぶ
+    else if (action === 'block') giveNoop(R, me, 'blockNoop', () => { R.reserve = true; });   // 爆弾を持ったままネット際で跳び、サーブの位置へ戻ってから、もう一度選ぶ
     else {                                                // その場で爆弾を放り上げ、レシーブかアタックで打つ
       const d = dirOf(me.team);
       b.held = null;
@@ -730,7 +731,7 @@ function resolveContact(R, a, c) {
 
 function onFloor(R, hit) {
   for (const a of R.actors) a.task = null;
-  R.state = 'boom'; R.choose = null;
+  R.state = 'boom'; R.choose = null; R.reserve = false;
   R.boom = { t: 0, hit, fired: false };
   R.events.push({ type: 'floor', x: hit.x, z: hit.z, side: hit.side });
 }
@@ -741,6 +742,7 @@ function tickRally(R, realDt) {
   if (R.state === 'choose') R.choose.left -= realDt;
   R.simT += dt;
   for (const a of R.actors) { if (a.fly) stepFly(a, dt, R); else stepActor(a, dt, R.simT); }
+  if (R.reserve && Math.hypot(R.me.x - R.me.home.x, R.me.z - R.me.home.z) < 0.05) { R.reserve = false; openChoice(R, 'serve'); }   // サーブの位置に戻ったら、もう一度選ぶ
   separateActors(R);
   collideFlyers(R);
   for (const a of R.actors) {                             // 爆弾に触らない動き（空振り・跳ぶだけ）の終わり
