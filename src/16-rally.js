@@ -274,9 +274,9 @@ function resolveContact(R, a, c) {
   const t = a.task;
   a.task = null;
   a.home = { ...a.base };                                 // サーブを打ったら定位置へ戻る
+  if (c === 'miss') { R.events.push({ type: 'miss', actor: a, kind: t.kind }); return; }   // 2 人で追っていれば、もう 1 人はそのまま追う
   const p = partnerOf(R, a);
   if (p.task && p.task.contact && p.task.kind === t.kind) p.task = null;   // もう 1 人が触った球は追わない
-  if (c === 'miss') { R.events.push({ type: 'miss', actor: a, kind: t.kind }); return; }
   a.lastHit = { kind: t.kind, at: R.simT };
   R.ball.vel = shotFor(R, a, t);
   R.events.push({ type: 'hit', actor: a, kind: t.kind, ok: t.ok });

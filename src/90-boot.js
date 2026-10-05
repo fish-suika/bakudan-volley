@@ -49,7 +49,7 @@
       }
       else if (e.type === 'point') {
         setScore(e.score);
-        showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);
+        if (e.score[e.scorer] < CFG.winScore) showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);   // 最後の 1 点は勝敗の画面に任せる
       }
       else if (e.type === 'gameover') showResult(e.winner, e.score);
       else if (e.type === 'bump') showToast('ゴツン！', 0.8);
