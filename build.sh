@@ -32,6 +32,7 @@ cat src/verify-head.html \
     src/15-actors.js \
     src/16-rally.js \
     src/20-blast.js \
+    src/42-motions.js \
     src/verify-tests.js \
     src/99-tail.html > verify.html
 

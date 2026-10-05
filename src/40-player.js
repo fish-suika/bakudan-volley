@@ -1,6 +1,5 @@
 // ===== 選手の人型（コードで組む。関節を回してポーズを作る） =====
 // 関節は腰（hips）を根元にした木構造。体の前はローカルの +Z、左は +X
-const JOINTS = ['hips', 'spine', 'neck', 'head', 'shoulderL', 'elbowL', 'shoulderR', 'elbowR', 'hipL', 'kneeL', 'hipR', 'kneeR'];
 const TEAM_COLORS = [{ shirt: 0x2f6fdf, shorts: 0x1d2b4f }, { shirt: 0xd8433a, shorts: 0x4a1d1d }];
 
 function makePlayer(scene, team) {
@@ -82,7 +81,7 @@ function lookAtTarget(pl, target, dt) {
 // 吹っ飛んでいる間（actor.fly）は、体の中心で回し、倒れて、起き上がる
 function updatePlayer(pl, a, dt, simT, focus) {
   const f = a.fly;
-  const target = f ? flyPose(f, simT) : poseFor(a, simT);
+  const target = f ? flyPose(f, simT) : motionFor(a, simT);
   if (!pl.cur) pl.cur = { hipsDrop: 0 };
   const k = Math.min(1, dt * 14);
   for (const name of JOINTS) {

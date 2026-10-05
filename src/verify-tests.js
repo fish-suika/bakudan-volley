@@ -643,6 +643,93 @@ test('ラリー：startPoint は飛んでいる人も定位置に戻す', () => 
   eq(R.actors.every(a => a.fly === null), true);
 });
 
+// ===== モーション =====
+test('blendPose: 2 つのポーズの間を k で混ぜる（無い関節は 0、hipsDrop も混ぜる）', () => {
+  const p = blendPose({ hipsDrop: 0.2, spine: [1, 0, 0] }, { kneeL: [2, 0, 0] }, 0.25);
+  eq(p.spine, [0.75, 0, 0]);
+  eq(p.kneeL, [0.5, 0, 0]);
+  near(p.hipsDrop, 0.15, 1e-9);
+  eq(p.head, [0, 0, 0]);
+});
+
+test('sampleClip: キーの時刻ではそのポーズ、間はなめらかに混ぜ、範囲の外は端のポーズ', () => {
+  const clip = [[0, 'ready'], [1, 'receive']];
+  eq(sampleClip(clip, 0).spine, POSES.ready.spine);
+  eq(sampleClip(clip, 1).spine, POSES.receive.spine);
+  eq(sampleClip(clip, 5).spine, POSES.receive.spine);
+  eq(sampleClip(clip, -5).spine, POSES.ready.spine);
+  near(sampleClip(clip, 0.5).spine[0], (POSES.ready.spine[0] + POSES.receive.spine[0]) / 2, 1e-9);
+});
+
+test('クリップ：時刻は増える順で、ポーズの名前はすべて POSES にある', () => {
+  for (const k in CLIPS) {
+    const c = CLIPS[k];
+    for (let i = 0; i < c.length; i++) {
+      eq(!!POSES[c[i][1]], true, k + ' の ' + c[i][1]);
+      if (i > 0) eq(c[i][0] > c[i - 1][0], true, k + ' の時刻');
+    }
+  }
+});
+
+test('新しいポーズの hipsDrop は、脚の縦の長さに合っている（足が床から 3cm 以上浮かない・沈まない）', () => {
+  for (const name of ['armsBack', 'landing', 'receiveReady', 'receivePush', 'tossReady', 'blockReady', 'blockDip', 'approachReady']) {
+    const p = POSES[name];
+    for (const s of ['L', 'R']) {
+      const hip = (p['hip' + s] || [0, 0, 0])[0], knee = (p['knee' + s] || [0, 0, 0])[0];
+      const len = 0.45 * Math.cos(hip) + 0.45 * Math.cos(hip + knee);
+      eq(Math.abs((0.9 - len) - (p.hipsDrop || 0)) < 0.06 || s === 'R' && name === 'approachReady', true, name + ' ' + s + ' の脚 ' + len.toFixed(3));
+    }
+  }
+});
+
+function nearJoint(p, q, joint, label) {                  // ポーズ p と q の関節 joint の角度が（小数の誤差の範囲で）同じ
+  for (let i = 0; i < 3; i++) near(p[joint][i], q[joint][i], 1e-6, (label || '') + ' ' + joint + '[' + i + ']');
+}
+
+test('motionFor：アタックは打つ予定の時刻に振り下ろし、その前は振りかぶっている', () => {
+  const a = newActor(0, 0, -1.3, 0);
+  a.task = { kind: 'attack', contact: true, contactAt: 10, at: { x: -1.3, z: 0 } };
+  nearJoint(motionFor(a, 10), POSES.spikeHit, 'shoulderR', '打つ瞬間');
+  nearJoint(motionFor(a, 9.85), POSES.spikeBack, 'shoulderR', '振りかぶり');
+  nearJoint(motionFor(a, 8), POSES.approachReady, 'shoulderR', '助走の前は待つ構え');
+});
+
+test('motionFor：打ったあとは、そのクリップの続き（着地 → 構え）', () => {
+  const a = newActor(0, 0, -1.3, 0);
+  a.lastHit = { kind: 'attack', at: 10 };
+  nearJoint(motionFor(a, 10.43), POSES.landing, 'kneeL', '着地');
+  nearJoint(motionFor(a, 10.79), POSES.ready, 'kneeL', '構え');
+});
+
+test('motionFor：サーブはトスを上げる時刻（hold）を基準に、構え → トス → 跳んで打つ', () => {
+  const a = newActor(0, 0, -9.5, 0);
+  a.task = { kind: 'serve', contact: true, hold: 5, at: { x: -9.5, z: 0 } };
+  nearJoint(motionFor(a, 4.5), POSES.serveHold, 'shoulderL', '構え');
+  nearJoint(motionFor(a, 5 + CFG.motion.serveContact), POSES.spikeHit, 'shoulderR', '打つ瞬間');
+});
+
+test('motionFor：よろけているときは stagger、走っているときは歩いた距離で脚が回る', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.stun = 0.3;
+  eq(motionFor(a, 1), POSES.stagger);
+  a.stun = 0; a.moving = true; a.moveLeft = 5; a.mdx = 1; a.mdz = 0;
+  a.stride = 0;
+  const p0 = motionFor(a, 1).hipL[0];
+  a.stride = CFG.motion.strideLen / 4;
+  eq(Math.abs(motionFor(a, 1).hipL[0] - p0) > 0.1, true, '脚が動く');
+});
+
+test('facingFor：止まっている・近くへはネットのほう、遠くへ走るときは進む向き', () => {
+  const a = newActor(0, 0, -5, 0);
+  near(facingFor(a), Math.PI / 2, 1e-9);
+  a.moving = true; a.mdx = 0; a.mdz = 1; a.moveLeft = 1;
+  near(facingFor(a), Math.PI / 2, 1e-9, 'サイドステップ');
+  a.moveLeft = 5;
+  near(facingFor(a), 0, 1e-9, '+z へ走る');
+  const e = newActor(2, 1, 5, 0);
+  near(facingFor(e), -Math.PI / 2, 1e-9);
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');
