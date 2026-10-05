@@ -161,6 +161,46 @@ test('spikeVelocity: 打点が低ければ速さを落としてネットを越�
   near(h.x, 5, 0.1, 'x');
 });
 
+// ===== 選手の動き =====
+function stepFor(a, sec) { let t = 0; for (let i = 0; i < Math.round(sec * 60); i++) { t += 1 / 60; stepActor(a, 1 / 60, t); } }
+
+test('stepActor: task.at へ秒速 runSpeed で走り、着いたら止まる。仕事が無ければ home へ戻る', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -2, z: 0 } };
+  stepFor(a, 0.2);
+  near(a.x, -5 + CFG.runSpeed * 0.2, 0.05);
+  eq(a.moving, true);
+  stepFor(a, 1);
+  eq([a.x, a.moving], [-2, false]);
+  a.task = null;
+  stepFor(a, 1);
+  eq(a.x, -5, 'home');
+});
+
+test('stepActor: jumpAt を過ぎると跳び、jumpH まで上がって床に戻る', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -5, z: 0 }, jumpAt: 0 };
+  let top = 0;
+  for (let i = 0; i < 90; i++) { stepActor(a, 1 / 60, i / 60); top = Math.max(top, a.y); }
+  near(top, CFG.jumpH, 0.05);
+  eq(a.y, 0);
+  eq(a.task.jumped, true);
+});
+
+test('checkContact: 降りてきた爆弾が高さ h・手の届く距離なら hit、届かずに下を通れば miss、空振りなら miss', () => {
+  const a = newActor(0, 0, -3, 0);
+  a.task = { kind: 'receive', contact: true, h: 0.8, at: { x: -3, z: 0 } };
+  const b = newBall(-3.3, 0.79, 0); b.vel = { x: 0, y: -3, z: 0 };
+  eq(checkContact(a, b), 'hit');
+  b.pos.y = 2; eq(checkContact(a, b), null, 'まだ上');
+  b.pos = { x: -6, y: 0.15, z: 0 }; eq(checkContact(a, b), 'miss', '遠くの下を通った');
+  b.pos = { x: -6, y: 0.5, z: 0 }; eq(checkContact(a, b), null, 'まだ分からない');
+  a.task.whiff = true; b.pos = { x: -3.3, y: 0.79, z: 0 };
+  eq(checkContact(a, b), 'miss', '空振り');
+  a.task = { kind: 'receive', contact: true, pending: true, h: 0.8, at: { x: -3, z: 0 } };
+  eq(checkContact(a, b), null, '行き先が決まる前は触らない');
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');
