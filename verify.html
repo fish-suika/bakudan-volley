@@ -55,8 +55,17 @@ const CFG = {
     incoming: { receive: 0.9, directSoft: 0.7, directHard: 0.25, block: 0.6 },
     tossed: { receive: 0.95, attack: 0.9 },
   },
-  ai: { receive: 0.85, toss: 0.9, attack: 0.8, serve: 0.9 },
-  enemyOpeners: ['serve', 'attack'],                      // Phase 2 の試し：敵は サーブ → トスからアタック を交互に打つ
+  ai: {                                                   // 味方と敵の AI（ミスの確率は両チーム同じ）
+    receive: 0.85, dig: 0.45, toss: 0.9, attack: 0.8, serve: 0.9, block: 0.5,   // 成功率（dig は強い球のレシーブ）
+    blockTry: 0.35,                                       // 相手のアタックにブロックへ跳ぶ確率
+    delay: [0.05, 0.3], slowChance: 0.15, slowDelay: 0.5, // 反応の遅れ（秒）。slowChance の確率でさらに slowDelay 遅れる
+    bothGo: 0.12,                                         // 2 人とも同じ球へ向かってしまう確率
+    earlyJump: 0.1,                                       // アタックでジャンプが早すぎて空振りする確率
+    bumpStun: 0.7,                                        // ぶつかったときによろけて動けない時間（秒）
+  },
+  // ---- Phase 3：ラリーと点数 ----
+  winScore: 3,                                            // 先に取ったほうの勝ち
+  resetMax: 3.0,                                          // 点が決まってから、定位置へ戻るのを待つ最長（秒）
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
 };
 // ===== 爆弾の物理（three.js 非依存） =====
@@ -192,7 +201,7 @@ function spikeVelocity(from, to, speed) {
 // actor = { id, team, x, z, y（跳んでいる高さ）, vy, home（仕事が無いとき戻る所）, base（定位置）, task, moving, lastHit }
 // task  = { kind, ok, contact, h, at, pending, jump, jumpAt, jumped, jumpOnArrive, whiff, end, then, target, hold, contactAt, start }
 function newActor(id, team, x, z) {
-  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null };
+  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null, stun: 0 };
 }
 function dirOf(team) { return team === 0 ? 1 : -1; }      // 相手コートの向き（x の符号）
 function riseTime() { return Math.sqrt(2 * CFG.jumpH / CFG.gravity); }   // 踏み切ってから最高点まで
@@ -207,7 +216,9 @@ function stepActor(a, dt, simT) {
   }
   const g = t ? t.at : a.home;
   a.moving = false;
-  if (a.y === 0) {
+  if (a.stun > 0) a.stun = Math.max(0, a.stun - dt);
+  const waiting = t && t.delay && simT < t.start + t.delay;   // 反応が遅れて、まだ動き出さない
+  if (a.y === 0 && !waiting && !(a.stun > 0)) {
     const dx = g.x - a.x, dz = g.z - a.z, d = Math.hypot(dx, dz), step = CFG.runSpeed * dt;
     if (d > 0.02) {
       a.moving = true;
@@ -241,48 +252,125 @@ function checkContact(a, ball) {
   if (p.y < t.h - 0.6) return 'miss';
   return null;
 }
+
+// 選手どうしが重ならないよう押し合う。2 人とも爆弾へ走っていてぶつかったら、よろけて少し動けない
+function separateActors(R) {
+  const A = R.actors, min = CFG.player.r * 2;
+  for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
+    const a = A[i], b = A[j];
+    if (a.y > 0 || b.y > 0) continue;
+    const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
+    if (d >= min) continue;
+    const nx = d > 1e-6 ? dx / d : 1, nz = d > 1e-6 ? dz / d : 0, push = (min - d) / 2;
+    a.x -= nx * push; a.z -= nz * push;
+    b.x += nx * push; b.z += nz * push;
+    const chasing = o => o.task && o.task.contact && o.moving && !(o.stun > 0);
+    if (chasing(a) && chasing(b)) {
+      a.stun = b.stun = CFG.ai.bumpStun;
+      R.events.push({ type: 'bump', a, b });
+    }
+  }
+}
 // ===== ラリーの流れ（three.js 非依存） =====
-// R.state: 'choose'（スローで選択中）/ 'play'（それ以外の試合中）/ 'boom'（床に触れたあと）
+// R.state: 'choose'（スローで選択中）/ 'play'（それ以外の試合中）/ 'boom'（床に触れたあと）/ 'reset'（点のあと定位置へ戻る）/ 'over'（試合終了）
 // 選ぶ場面: 'serve' ①自分のサーブ番 / 'incoming' ②相手が打った（attack なら相手のトス＝アタックが来る）/ 'tossed' ③味方が自分にトスした
-// 描画側へは R.events に出来事を積む：choose / chosen / hit / miss / floor / explode
+// 描画側へは R.events に出来事を積む：choose / chosen / hit / miss / floor / explode / point / gameover / bump
 const ACTIONS = ['receive', 'attack', 'block', 'serve'];
 
 function newRally(rand) {
   const actors = CFG.startSpots.map((s, i) => newActor(i, s.team, s.x, s.z));
   return {
     state: 'play', simT: 0, ball: null, actors, me: actors[0], mate: actors[1],
-    choose: null, boom: null, awaiting: false, openerIdx: 0, events: [], rand: rand || Math.random,
+    choose: null, boom: null, awaiting: false, events: [], rand: rand || Math.random,
+    score: [0, 0], winner: null, resetT: 0, nextServe: 0, enemyServer: 0,
+    idle: [false, false],                                 // テスト用：true のチームは AI が受けに行かない
   };
 }
 function partnerOf(R, a) { return R.actors.find(o => o.team === a.team && o !== a); }
 function roll(R, p) { return R.rand() < p; }
 
-// 次の 1 点を始める。team が打つ（0 ならプレイヤー＝①の選択、1 なら敵。Phase 2 の敵はサーブとアタックを交互に）
-function startPoint(R, team) {
-  for (const a of R.actors) {
-    a.task = null; a.y = 0; a.vy = 0; a.lastHit = null;
-    a.home = { ...a.base }; a.x = a.base.x; a.z = a.base.z;
-  }
-  R.boom = null; R.choose = null; R.awaiting = false; R.state = 'play';
-  const server = team === 0 ? R.me : R.actors[2];
-  server.home = { x: -dirOf(team) * CFG.serveSpot, z: server.base.z * 0.5 };
-  server.x = server.home.x; server.z = server.home.z;
-  R.ball = newBall(server.x, 1.2, server.z);
-  R.ball.held = server;
-  if (team === 0) { openChoice(R, 'serve'); return; }
-  const kind = CFG.enemyOpeners[R.openerIdx++ % CFG.enemyOpeners.length];
-  if (kind === 'serve') giveServe(R, server, roll(R, CFG.ai.serve));
-  else enemyAttackOpener(R);
+function mishap(R, p) { return R.rand() >= 1 - p; }       // AI のミス（rand が 0 なら起きない）
+function speedOf(b) { return Math.hypot(b.vel.x, b.vel.y, b.vel.z); }
+// AI の反応の遅れ（秒）
+function reaction(R) {
+  const D = CFG.ai.delay;
+  return D[0] + R.rand() * (D[1] - D[0]) + (mishap(R, CFG.ai.slowChance) ? CFG.ai.slowDelay : 0);
+}
+// AI のレシーブ（強い球なら成功率が下がる。反応の遅れあり）
+function aiReceive(R, a, kind, hard) {
+  const t = giveTask(R, a, kind || 'receive', roll(R, hard ? CFG.ai.dig : CFG.ai.receive), { h: CFG.contactH.receive });
+  t.delay = reaction(R);
+  return t;
 }
 
-// Phase 2 の試し：敵の 1 人がネット際でトスを上げ、もう 1 人がアタックしてくる
-function enemyAttackOpener(R) {
-  const setter = R.actors[2], hitter = R.actors[3];
-  setter.home = { x: 2.5, z: 0 }; setter.x = 2.5; setter.z = 0;
-  R.ball = newBall(2.5, 2.3, 0);
-  R.ball.vel = shotVelocity(R.ball.pos, { x: CFG.shots.set.toX, z: hitter.base.z * 0.5 }, CFG.shots.set.apex);
-  setter.lastHit = { kind: 'toss', at: R.simT };
-  afterHit(R, setter, { kind: 'toss', ok: true });
+// こちらの球が敵の側へ来た：落下地点に近いほうがレシーブ。bothGo なら 2 人とも向かう
+function enemyDefend(R) {
+  if (R.idle[1]) return;
+  const land = predictDescent(R.ball, CFG.contactH.receive);
+  const free = R.actors.filter(a => a.team === 1 && !(a.task && a.task.kind === 'block'));
+  if (!land || !free.length) return;
+  const dist = a => Math.hypot(a.x - land.x, a.z - land.z);
+  free.sort((a, b) => dist(a) - dist(b));
+  const hard = speedOf(R.ball) > CFG.hardSpeed;
+  aiReceive(R, free[0], 'receive', hard);
+  if (free[1] && mishap(R, CFG.ai.bothGo)) aiReceive(R, free[1], 'receive', hard);
+}
+
+// こちらのアタッカーがアタックに入った：blockTry の確率で、アタッカーに近い敵がブロックに跳ぶ
+function enemyMaybeBlock(R, attacker) {
+  if (R.idle[1] || !mishap(R, CFG.ai.blockTry)) return;
+  const z = attacker.task.at.z;
+  const opp = R.actors.filter(a => a.team === 1).sort((a, b) => Math.abs(a.z - z) - Math.abs(b.z - z));
+  giveBlock(R, opp[0], roll(R, CFG.ai.block));
+}
+
+// サーブする人と、その立ち位置
+function serverOf(R, team) { return team === 0 ? R.me : R.actors[2 + R.enemyServer]; }
+function serveSpotOf(a) { return { x: -dirOf(a.team) * CFG.serveSpot, z: a.base.z * 0.5 }; }
+
+// 試合を始める（0-0、自分のサーブ）
+function newGame(R) {
+  R.score = [0, 0]; R.winner = null;
+  startPoint(R, 0);
+}
+
+// 全員を定位置に置いて、すぐ team のサーブを始める（試合の最初とテスト用）
+function startPoint(R, team) {
+  for (const a of R.actors) {
+    a.task = null; a.y = 0; a.vy = 0; a.lastHit = null; a.stun = 0;
+    a.home = { ...a.base }; a.x = a.base.x; a.z = a.base.z;
+  }
+  const s = serverOf(R, team);
+  s.home = serveSpotOf(s); s.x = s.home.x; s.z = s.home.z;
+  startServe(R, team);
+}
+
+// その場からサーブを始める。0 ならプレイヤーの①の選択、1 なら敵がサーブ（2 人が交代で打つ）
+function startServe(R, team) {
+  R.boom = null; R.choose = null; R.awaiting = false; R.state = 'play';
+  const s = serverOf(R, team);
+  R.ball = newBall(s.x, 1.2, s.z);
+  R.ball.held = s;
+  if (team === 0) { openChoice(R, 'serve'); return; }
+  R.enemyServer ^= 1;
+  giveServe(R, s, roll(R, CFG.ai.serve));
+}
+
+// 爆発を見せきったあと：点を入れ、勝敗が決まっていなければ定位置へ戻り始める
+function endPoint(R, loser) {
+  const scorer = 1 - loser;
+  R.score[scorer]++;
+  R.events.push({ type: 'point', scorer, score: R.score.slice() });
+  R.boom = null; R.ball = null;
+  for (const a of R.actors) { a.task = null; a.home = { ...a.base }; }
+  if (R.score[scorer] >= CFG.winScore) {
+    R.state = 'over'; R.winner = scorer;
+    R.events.push({ type: 'gameover', winner: scorer, score: R.score.slice() });
+    return;
+  }
+  R.state = 'reset'; R.resetT = 0; R.nextServe = loser;   // 取られた側がサーブ
+  const s = serverOf(R, loser);
+  s.home = serveSpotOf(s);
 }
 
 // その場面で選べる行動（ルール上ありえないものは押せない）
@@ -337,7 +425,13 @@ function giveReturn(R, a, ok) { return giveTask(R, a, 'return', ok, { h: CFG.con
 function giveToss(R, a, target) { return giveTask(R, a, 'toss', roll(R, CFG.ai.toss), { h: CFG.contactH.toss, target }); }
 function giveAttack(R, a, ok, kind) {
   const whiff = !ok && R.rand() < 0.5;                    // 失敗の半分は空振り、残りはネットにかける
-  return giveTask(R, a, kind || 'attack', ok, { h: kind === 'direct' ? CFG.contactH.direct : CFG.contactH.attack, jump: true, whiff });
+  const t = giveTask(R, a, kind || 'attack', ok, { h: kind === 'direct' ? CFG.contactH.direct : CFG.contactH.attack, jump: true, whiff });
+  if (a !== R.me && t.jumpAt != null && mishap(R, CFG.ai.earlyJump)) {   // AI：ジャンプが早すぎて空振り
+    t.jumpAt -= 0.35;
+    t.whiff = true;
+  }
+  if (a.team === 0) enemyMaybeBlock(R, a);
+  return t;
 }
 // ブロック：相手のアタッカーの正面のネット際へ行き、打つ瞬間に合わせて跳ぶ
 function giveBlock(R, a, ok) {
@@ -375,14 +469,16 @@ function choose(R, action) {
   }
   if (sc === 'incoming') {
     R.awaiting = true;
-    if (action === 'receive') giveReceive(R, me, roll(R, P.incoming.receive));
-    else if (action === 'attack') {
-      const hard = attack || Math.hypot(b.vel.x, b.vel.y, b.vel.z) > CFG.hardSpeed;
+    const hard = attack || speedOf(b) > CFG.hardSpeed;
+    if (action === 'receive') {
+      giveReceive(R, me, roll(R, P.incoming.receive));
+      if (mishap(R, CFG.ai.bothGo)) aiReceive(R, mate, 'receive', hard);   // 味方も向かってしまう
+    } else if (action === 'attack') {
       giveAttack(R, me, roll(R, hard ? P.incoming.directHard : P.incoming.directSoft), 'direct');
     } else {
       if (action === 'block') giveBlock(R, me, attack && roll(R, P.incoming.block));
       else if (action === 'serve') giveNoop(R, me, 'whiff');
-      giveReceive(R, mate, roll(R, CFG.ai.receive));      // 空いた所は味方がカバー（時間切れも同じ）
+      aiReceive(R, mate, 'receive', hard);                // 空いた所は味方がカバー（時間切れも同じ）
     }
     return;
   }
@@ -391,7 +487,7 @@ function choose(R, action) {
   else if (action === 'receive') giveReturn(R, me, roll(R, P.tossed.receive));
   else if (action === 'block') giveNoop(R, me, 'blockNoop');
   else if (action === 'serve') giveNoop(R, me, 'whiff');
-  else giveReturn(R, mate, roll(R, CFG.ai.receive));      // 時間切れ：味方が返す
+  else aiReceive(R, mate, 'return', false);              // 時間切れ：味方が返す
 }
 
 // 相手がブロックに跳んでいれば、そのブロックの成否に合わせてコースを決める：
@@ -440,8 +536,9 @@ function afterHit(R, a, t) {
     else giveAttack(R, partner, roll(R, CFG.ai.attack));
     if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', true);   // 敵のトス＝アタックが来る
   }
-  if (!headingTo(R, a.team)) {
+  if (!headingTo(R, a.team)) {                            // 相手側へ飛んだ
     retarget(R, 1 - a.team);
+    if (a.team === 0) enemyDefend(R);
     if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false, t.kind === 'serve');
   }
 }
@@ -450,6 +547,8 @@ function resolveContact(R, a, c) {
   const t = a.task;
   a.task = null;
   a.home = { ...a.base };                                 // サーブを打ったら定位置へ戻る
+  const p = partnerOf(R, a);
+  if (p.task && p.task.contact && p.task.kind === t.kind) p.task = null;   // もう 1 人が触った球は追わない
   if (c === 'miss') { R.events.push({ type: 'miss', actor: a, kind: t.kind }); return; }
   a.lastHit = { kind: t.kind, at: R.simT };
   R.ball.vel = shotFor(R, a, t);
@@ -470,6 +569,7 @@ function tickRally(R, realDt) {
   if (R.state === 'choose') R.choose.left -= realDt;
   R.simT += dt;
   for (const a of R.actors) stepActor(a, dt, R.simT);
+  separateActors(R);
   for (const a of R.actors) {                             // 爆弾に触らない動き（空振り・跳ぶだけ）の終わり
     const t = a.task;
     if (!t || t.contact) continue;
@@ -497,7 +597,12 @@ function tickRally(R, realDt) {
       R.boom.fired = true;
       R.events.push({ type: 'explode', x: R.boom.hit.x, z: R.boom.hit.z, side: R.boom.hit.side });
     }
-    if (R.boom.t >= CFG.explodeDelay + CFG.afterBoom) startPoint(R, R.boom.hit.side);   // 取られた側のサーブ
+    if (R.boom.t >= CFG.explodeDelay + CFG.afterBoom) endPoint(R, R.boom.hit.side);
+  }
+  if (R.state === 'reset') {                              // 全員が定位置（サーブの人はサーブ位置）に着いたら次のサーブ
+    R.resetT += realDt;
+    const home = R.actors.every(a => Math.hypot(a.x - a.home.x, a.z - a.home.z) < 0.05);
+    if (home || R.resetT > CFG.resetMax) startServe(R, R.nextServe);
   }
 }
 // ===== 検証ハーネス =====
@@ -713,6 +818,42 @@ test('ブロックは手の範囲に触れたときだけ止める', () => {
   b.pos = { x: -0.35, y: 3.8, z: 0 }; eq(checkContact(a, b), null, '手より上');
 });
 
+test('stepActor: task.delay の間は動き出さない（反応の遅れ）', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -2, z: 0 }, delay: 0.3, start: 0 };
+  stepFor(a, 0.2);
+  eq(a.x, -5, 'まだ動かない');
+  stepFor(a, 0.5);                                         // stepFor は時刻を 0 から数え直すので、遅れ（0.3 秒）より長く進める
+  eq(a.x > -5, true, '動き出した');
+});
+
+test('stepActor: stun の間は動けず、時間がたつと戻る', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -2, z: 0 } };
+  a.stun = 0.5;
+  stepFor(a, 0.4);
+  eq(a.x, -5);
+  stepFor(a, 0.3);
+  eq(a.stun, 0);
+  eq(a.x > -5, true);
+});
+
+test('separateActors: 重なった選手は押し合って離れ、2 人とも爆弾へ走っていたらぶつかってよろける', () => {
+  const R = { actors: [newActor(0, 0, -3, 0), newActor(1, 0, -2.6, 0)], events: [] };
+  const [a, b] = R.actors;
+  a.task = { kind: 'receive', contact: true, at: { x: 0, z: 0 } }; a.moving = true;
+  b.task = { kind: 'receive', contact: true, at: { x: 0, z: 0 } }; b.moving = true;
+  separateActors(R);
+  near(Math.hypot(a.x - b.x, a.z - b.z), CFG.player.r * 2, 0.001, '離れた');
+  eq(a.stun > 0 && b.stun > 0, true, 'よろけた');
+  eq(R.events.some(e => e.type === 'bump'), true);
+  a.stun = b.stun = 0; a.task = null;
+  a.x = -3; b.x = -2.6;
+  R.events.length = 0;
+  separateActors(R);
+  eq(R.events.length, 0, '片方だけなら押し合うだけ');
+});
+
 // ===== ラリー =====
 const zero = () => 0;
 function runFor(R, sec) {
@@ -730,9 +871,25 @@ function runUntilChoose(R, sec) {                          // 'choose' が出る
 }
 const hitBy = (ev, a, kind) => ev.some(e => e.type === 'hit' && e.actor === a && e.kind === kind);
 const boomSide = ev => { const e = ev.find(e => e.type === 'explode'); return e ? e.side : null; };
+function quietRally() { const R = newRally(zero); R.idle[1] = true; return R; }   // 敵が受けない（Phase 2 までのテスト用）
+function enemyAttack(R) {                                  // 試し：敵がネット際でトスを上げ、もう 1 人がアタックしてくる
+  startPoint(R, 1);
+  for (const a of R.actors) a.task = null;
+  R.events.length = 0;
+  const setter = R.actors[2], hitter = R.actors[3];
+  setter.home = { x: 2.5, z: 0 }; setter.x = 2.5; setter.z = 0;
+  R.ball = newBall(2.5, 2.3, 0);
+  R.ball.vel = shotVelocity(R.ball.pos, { x: CFG.shots.set.toX, z: hitter.base.z * 0.5 }, CFG.shots.set.apex);
+  afterHit(R, setter, { kind: 'toss', ok: true });
+}
+function withAI(changes, fn) {                             // CFG.ai を一時的に変えて試す
+  const old = {};
+  for (const k in changes) { old[k] = CFG.ai[k]; CFG.ai[k] = changes[k]; }
+  try { fn(); } finally { Object.assign(CFG.ai, old); }
+}
 
 test('startPoint(0)：プレイヤーがエンドラインの外で爆弾を持ち、①サーブ番の選択になる', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   eq([R.state, R.choose.scene, R.ball.held === R.me], ['choose', 'serve', true]);
   eq(R.me.x, -CFG.serveSpot);
@@ -740,7 +897,7 @@ test('startPoint(0)：プレイヤーがエンドラインの外で爆弾を持�
 });
 
 test('① サーブを選ぶと、構えてからトスを上げて打ち、相手コートで爆発する', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   choose(R, 'serve');
   const ev = runFor(R, 5);
@@ -749,7 +906,7 @@ test('① サーブを選ぶと、構えてからトスを上げて打ち、相�
 });
 
 test('① 時間切れなら自動でサーブする', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   const ev = runFor(R, CFG.choiceTime + 0.1);
   eq(ev.some(e => e.type === 'chosen' && e.action === null), true);
@@ -758,7 +915,7 @@ test('① 時間切れなら自動でサーブする', () => {
 });
 
 test('① ブロックは押せない（選択が続き、爆弾も持ったまま）', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   choose(R, 'block');
   eq(R.state, 'choose');
@@ -767,20 +924,19 @@ test('① ブロックは押せない（選択が続き、爆弾も持ったま�
 });
 
 test('相手のサーブではブロックとアタックが押せず、相手のアタックでは 4 つとも押せる', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   eq(R.choose.allowed, ['receive', 'serve']);
   choose(R, 'block'); eq(R.state, 'choose');
   choose(R, 'attack'); eq(R.state, 'choose');
-  const R2 = newRally(zero);
-  R2.openerIdx = 1;
-  startPoint(R2, 1);
+  const R2 = quietRally();
+  enemyAttack(R2);
   eq(R2.choose.allowed.length, 4);
 });
 
 test('敵のサーブを打たれた瞬間に ②（アタックではない）の選択になる', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   const ev = runUntilChoose(R, 4);
   const c = ev.find(e => e.type === 'choose');
@@ -789,7 +945,7 @@ test('敵のサーブを打たれた瞬間に ②（アタックではない）�
 });
 
 test('② レシーブ → 味方がトス → ③ の選択 → アタックで相手コートに爆発', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, 'receive');
@@ -804,7 +960,7 @@ test('② レシーブ → 味方がトス → ③ の選択 → アタックで
 });
 
 test('③ でブロックを選ぶと、ネット際で跳ぶだけで爆弾には触らない', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, 'receive');
@@ -816,7 +972,7 @@ test('③ でブロックを選ぶと、ネット際で跳ぶだけで爆弾に�
 });
 
 test('② 時間切れ（味方に任せる）なら味方がレシーブし、自分が自動でトスし、味方がアタックする', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, null);
@@ -828,7 +984,7 @@ test('② 時間切れ（味方に任せる）なら味方がレシーブし、�
 });
 
 test('② でサーブを選ぶと、その場で空振りし、味方がカバーしてレシーブする', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, 'serve');
@@ -838,9 +994,8 @@ test('② でサーブを選ぶと、その場で空振りし、味方がカバ�
 });
 
 test('敵がトスを上げた瞬間に ②（アタックが来る）の選択になり、ブロックで止めて相手コートに落とせる', () => {
-  const R = newRally(zero);
-  R.openerIdx = 1;                                         // 敵の 2 番目の打ち方＝トスからアタック
-  startPoint(R, 1);
+  const R = quietRally();
+  enemyAttack(R);
   const c = R.events.find(e => e.type === 'choose');
   eq(c && [c.scene, c.attack], ['incoming', true]);
   choose(R, 'block');
@@ -850,12 +1005,122 @@ test('敵がトスを上げた瞬間に ②（アタックが来る）の選択�
   eq(boomSide(ev), 1);
 });
 
-test('爆発したら、取られた側のサーブで次が始まる', () => {
+// ===== 点数と勝敗 =====
+test('爆発してしばらくすると点が入り、全員が歩いて定位置へ戻ってから、取られた側がサーブする', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  choose(R, 'serve');
+  const ev = runFor(R, 5 + CFG.afterBoom);
+  const p = ev.find(e => e.type === 'point');
+  eq(p && [p.scorer, p.score], [0, [1, 0]]);
+  eq(R.score, [1, 0]);
+  const ev2 = runUntilChoose(R, 8);
+  eq(ev2.some(e => e.type === 'hit' && e.kind === 'serve' && e.actor.team === 1), true, '敵がサーブ');
+  eq(R.choose && R.choose.scene, 'incoming');
+});
+
+test('3 点目で試合が終わり、newGame で 0-0 から自分のサーブで始まる', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  let ev = [];
+  for (let k = 0; k < CFG.winScore; k++) {
+    onFloor(R, { x: 5, z: 0, side: 1 });
+    ev = ev.concat(runFor(R, CFG.explodeDelay + CFG.afterBoom + 0.1));
+  }
+  eq(R.state, 'over');
+  eq(R.winner, 0);
+  eq(ev.some(e => e.type === 'gameover' && e.winner === 0), true);
+  newGame(R);
+  eq([R.score, R.state, R.choose.scene], [[0, 0], 'choose', 'serve']);
+});
+
+test('敵のサーブは 2 人が交代で打つ', () => {
+  const R = quietRally();
+  startPoint(R, 1);
+  const first = R.ball.held;
+  startPoint(R, 1);
+  eq(first !== R.ball.held && first.team === 1 && R.ball.held.team === 1, true);
+});
+
+
+// ===== AI =====
+test('敵 AI：こちらのサーブを近いほうがレシーブし、相方がトスし、アタックが来る（②アタック）', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  R.events.length = 0;                                     // サーブの選択の出来事を捨てる（runUntilChoose がすぐ止まらないように）
+  choose(R, 'serve');
+  const ev = runUntilChoose(R, 8);
+  eq(hitBy(ev, R.actors[2], 'receive'), true, '近いほう（z=-2）がレシーブ');
+  eq(hitBy(ev, R.actors[3], 'toss'), true, '相方がトス');
+  eq(R.choose && [R.choose.scene, R.choose.attack], ['incoming', true]);
+});
+
+test('敵 AI：rand が 0 ならミスは起きない（反応の遅れは最短、2 人目は向かわない）', () => {
   const R = newRally(zero);
   startPoint(R, 0);
   choose(R, 'serve');
-  runFor(R, 5 + CFG.afterBoom);                             // 相手コートで爆発 → 敵のサーブ
-  eq(R.actors[2].lastHit !== null || R.ball.held === R.actors[2], true);
+  runFor(R, 2.3);                                          // サーブを打った直後
+  const t2 = R.actors[2].task, t3 = R.actors[3].task;
+  eq(t2 && t2.kind, 'receive');
+  near(t2.delay, CFG.ai.delay[0], 1e-9);
+  eq(t3, null);
+});
+
+test('敵 AI：bothGo なら 2 人とも同じ球へ向かう', () => {
+  withAI({ bothGo: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 0);
+    choose(R, 'serve');
+    runFor(R, 2.3);
+    eq([R.actors[2].task && R.actors[2].task.kind, R.actors[3].task && R.actors[3].task.kind], ['receive', 'receive']);
+  });
+});
+
+test('敵 AI：earlyJump ならアタックのジャンプが早すぎて空振りになる', () => {
+  withAI({ earlyJump: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 0);
+    R.events.length = 0;
+    choose(R, 'serve');
+    runUntilChoose(R, 8);
+    const t = R.actors[2].task;
+    eq(t && [t.kind, t.whiff], ['attack', true]);
+  });
+});
+
+test('敵 AI：blockTry なら、こちらのアタックにアタッカーへ近いほうがブロックに跳ぶ', () => {
+  withAI({ blockTry: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 1);
+    runUntilChoose(R, 4);
+    choose(R, 'receive');
+    runUntilChoose(R, 6);
+    choose(R, 'attack');
+    const blk = R.actors.find(a => a.team === 1 && a.task && a.task.kind === 'block');
+    eq(!!blk, true);
+    const other = R.actors.find(a => a.team === 1 && a !== blk);
+    eq(Math.abs(blk.z - R.me.task.at.z) <= Math.abs(other.z - R.me.task.at.z), true, '近いほう');
+  });
+});
+
+test('味方 AI：bothGo なら、自分がレシーブを選んでも味方も向かってしまう', () => {
+  withAI({ bothGo: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 1);
+    runUntilChoose(R, 4);
+    choose(R, 'receive');
+    eq([R.me.task.kind, R.mate.task && R.mate.task.kind], ['receive', 'receive']);
+  });
+});
+
+test('味方 AI：カバーのレシーブにも反応の遅れがある', () => {
+  withAI({ slowChance: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 1);
+    runUntilChoose(R, 4);
+    choose(R, null);
+    near(R.mate.task.delay, CFG.ai.delay[0] + CFG.ai.slowDelay, 1e-9);
+  });
 });
 
 // ===== 結果表示 =====

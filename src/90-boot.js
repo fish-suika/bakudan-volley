@@ -29,7 +29,12 @@
     camera.updateProjectionMatrix();
   });
 
-  startPoint(R, 0);                                       // 最初のサーブはプレイヤーのチーム
+  document.getElementById('againBtn').addEventListener('click', () => {
+    hideResult();
+    newGame(R);
+    setScore(R.score);
+  });
+  newGame(R);                                             // 0-0、最初のサーブはプレイヤーのチーム
   const clock = new THREE.Clock();
   function frame() {
     requestAnimationFrame(frame);
@@ -42,6 +47,12 @@
         spawnExplosion(e.x, e.z);
         showToast(e.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
       }
+      else if (e.type === 'point') {
+        setScore(e.score);
+        showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);
+      }
+      else if (e.type === 'gameover') showResult(e.winner, e.score);
+      else if (e.type === 'bump') showToast('ゴツン！', 0.8);
     }
     R.events.length = 0;
     if (R.state === 'choose') setTimer(R.choose.left / CFG.choiceTime);

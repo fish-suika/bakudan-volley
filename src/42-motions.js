@@ -70,6 +70,14 @@ const POSES = {
     hipL: [-0.2, 0, 0.05], kneeL: [0.3, 0, 0],
     hipR: [0.15, 0, -0.05], kneeR: [0.2, 0, 0],
   },
+  stagger: {                                              // ぶつかってよろける：のけぞって両腕を振り回す
+    hipsDrop: 0.08,
+    spine: [-0.4, 0.2, 0.15], neck: [0.3, 0, 0],
+    shoulderL: [-1.6, 0, 1.0], elbowL: [-0.4, 0, 0],
+    shoulderR: [-1.2, 0, -1.2], elbowR: [-0.6, 0, 0],
+    hipL: [0.2, 0, 0.1], kneeL: [0.5, 0, 0],
+    hipR: [-0.6, 0, -0.1], kneeR: [0.9, 0, 0],
+  },
 };
 
 POSES.run2 = mirrorPose(POSES.run1);                      // 走る（右脚が前）
@@ -92,6 +100,7 @@ const WAIT_POSE = { receive: 'receive', bump: 'receive', return: 'receive', toss
 // 選手の状態（15-actors.js の actor）から、今とるべきポーズを選ぶ
 function poseFor(a, simT) {
   const t = a.task;
+  if (a.stun > 0) return POSES.stagger;
   const recent = a.lastHit && simT - a.lastHit.at < 0.45;   // 打った直後はその形を残す
   if (a.y > 0) {
     if (t && (t.kind === 'block' || t.kind === 'blockNoop')) return POSES.block;

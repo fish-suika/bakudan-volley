@@ -43,6 +43,22 @@
   #rotate{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:16px;
     text-align:center;font-size:20px;background:#20242a}
   @media (orientation: portrait) and (pointer: coarse){#rotate{display:flex}}
+  /* ---- 点数 ---- */
+  #score{position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:5;display:flex;align-items:center;gap:10px;
+    padding:6px 16px;border-radius:20px;background:rgba(10,12,16,.6);font-size:15px;letter-spacing:.08em;pointer-events:none}
+  #score b{font-size:24px;min-width:1ch;text-align:center}
+  #score .t0{color:#8fb6ff}
+  #score .t1{color:#ff9a8f}
+  @media (max-width:820px){#hint{display:none}}
+
+  /* ---- 勝敗の画面 ---- */
+  #result{position:fixed;inset:0;z-index:12;display:none;flex-direction:column;align-items:center;justify-content:center;
+    gap:14px;padding:16px;text-align:center;background:rgba(10,12,16,.72)}
+  #result.on{display:flex}
+  #result h2{font-size:clamp(30px,7vw,56px);letter-spacing:.08em}
+  #result p{font-size:20px;letter-spacing:.12em}
+  #againBtn{margin-top:8px;font:700 18px var(--jp);letter-spacing:.15em;color:#fff;background:#d8433a;border:0;
+    border-radius:28px;padding:12px 34px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -55,6 +71,8 @@
   <button data-act="serve"><b>4</b>サーブ</button>
   <div id="timer"><i></i></div>
 </div>
+<div id="score"><span class="t0">味方</span><b id="s0">0</b><span>-</span><b id="s1">0</b><span class="t1">相手</span></div>
+<div id="result"><h2 id="resultText"></h2><p id="resultScore"></p><button id="againBtn">もう一回</button></div>
 <div id="toast"></div>
 <div id="rotate">横画面にしてください</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

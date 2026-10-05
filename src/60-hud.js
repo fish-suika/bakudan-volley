@@ -26,3 +26,13 @@ function hideChoice() {
 function setTimer(frac) {
   document.querySelector('#timer i').style.width = (Math.max(0, Math.min(1, frac)) * 100) + '%';
 }
+function setScore(s) {
+  document.getElementById('s0').textContent = s[0];
+  document.getElementById('s1').textContent = s[1];
+}
+function showResult(winner, s) {
+  document.getElementById('resultText').textContent = winner === 0 ? '勝ち！' : '負け……';
+  document.getElementById('resultScore').textContent = '味方 ' + s[0] + ' - ' + s[1] + ' 相手';
+  document.getElementById('result').classList.add('on');
+}
+function hideResult() { document.getElementById('result').classList.remove('on'); }
