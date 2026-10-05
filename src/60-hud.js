@@ -7,3 +7,19 @@ function showToast(text, sec) {
   clearTimeout(__toastTimer);
   __toastTimer = setTimeout(() => el.classList.remove('on'), (sec || 1.6) * 1000);
 }
+
+const SCENE_TEXT = { serve: 'サーブ番', incoming: '相手が打った！', tossed: 'トスが上がった！' };
+function showChoice(scene, attack) {
+  document.getElementById('actions').classList.add('on');
+  const el = document.getElementById('scene');
+  el.textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
+  el.classList.add('on');
+}
+function hideChoice() {
+  document.getElementById('actions').classList.remove('on');
+  document.getElementById('scene').classList.remove('on');
+  setTimer(0);
+}
+function setTimer(frac) {
+  document.querySelector('#timer i').style.width = (Math.max(0, Math.min(1, frac)) * 100) + '%';
+}
