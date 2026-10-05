@@ -43,6 +43,5 @@ const CFG = {
   // ---- Phase 3：ラリーと点数 ----
   winScore: 3,                                            // 先に取ったほうの勝ち
   resetMax: 3.0,                                          // 点が決まってから、定位置へ戻るのを待つ最長（秒）
-  enemyOpeners: ['serve', 'attack'],                      // Phase 2 の試し（Task 2 で消す）
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
 };

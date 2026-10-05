@@ -264,9 +264,25 @@ function runUntilChoose(R, sec) {                          // 'choose' が出る
 }
 const hitBy = (ev, a, kind) => ev.some(e => e.type === 'hit' && e.actor === a && e.kind === kind);
 const boomSide = ev => { const e = ev.find(e => e.type === 'explode'); return e ? e.side : null; };
+function quietRally() { const R = newRally(zero); R.idle[1] = true; return R; }   // 敵が受けない（Phase 2 までのテスト用）
+function enemyAttack(R) {                                  // 試し：敵がネット際でトスを上げ、もう 1 人がアタックしてくる
+  startPoint(R, 1);
+  for (const a of R.actors) a.task = null;
+  R.events.length = 0;
+  const setter = R.actors[2], hitter = R.actors[3];
+  setter.home = { x: 2.5, z: 0 }; setter.x = 2.5; setter.z = 0;
+  R.ball = newBall(2.5, 2.3, 0);
+  R.ball.vel = shotVelocity(R.ball.pos, { x: CFG.shots.set.toX, z: hitter.base.z * 0.5 }, CFG.shots.set.apex);
+  afterHit(R, setter, { kind: 'toss', ok: true });
+}
+function withAI(changes, fn) {                             // CFG.ai を一時的に変えて試す
+  const old = {};
+  for (const k in changes) { old[k] = CFG.ai[k]; CFG.ai[k] = changes[k]; }
+  try { fn(); } finally { Object.assign(CFG.ai, old); }
+}
 
 test('startPoint(0)：プレイヤーがエンドラインの外で爆弾を持ち、①サーブ番の選択になる', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   eq([R.state, R.choose.scene, R.ball.held === R.me], ['choose', 'serve', true]);
   eq(R.me.x, -CFG.serveSpot);
@@ -274,7 +290,7 @@ test('startPoint(0)：プレイヤーがエンドラインの外で爆弾を持�
 });
 
 test('① サーブを選ぶと、構えてからトスを上げて打ち、相手コートで爆発する', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   choose(R, 'serve');
   const ev = runFor(R, 5);
@@ -283,7 +299,7 @@ test('① サーブを選ぶと、構えてからトスを上げて打ち、相�
 });
 
 test('① 時間切れなら自動でサーブする', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   const ev = runFor(R, CFG.choiceTime + 0.1);
   eq(ev.some(e => e.type === 'chosen' && e.action === null), true);
@@ -292,7 +308,7 @@ test('① 時間切れなら自動でサーブする', () => {
 });
 
 test('① ブロックは押せない（選択が続き、爆弾も持ったまま）', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 0);
   choose(R, 'block');
   eq(R.state, 'choose');
@@ -301,20 +317,19 @@ test('① ブロックは押せない（選択が続き、爆弾も持ったま�
 });
 
 test('相手のサーブではブロックとアタックが押せず、相手のアタックでは 4 つとも押せる', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   eq(R.choose.allowed, ['receive', 'serve']);
   choose(R, 'block'); eq(R.state, 'choose');
   choose(R, 'attack'); eq(R.state, 'choose');
-  const R2 = newRally(zero);
-  R2.openerIdx = 1;
-  startPoint(R2, 1);
+  const R2 = quietRally();
+  enemyAttack(R2);
   eq(R2.choose.allowed.length, 4);
 });
 
 test('敵のサーブを打たれた瞬間に ②（アタックではない）の選択になる', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   const ev = runUntilChoose(R, 4);
   const c = ev.find(e => e.type === 'choose');
@@ -323,7 +338,7 @@ test('敵のサーブを打たれた瞬間に ②（アタックではない）�
 });
 
 test('② レシーブ → 味方がトス → ③ の選択 → アタックで相手コートに爆発', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, 'receive');
@@ -338,7 +353,7 @@ test('② レシーブ → 味方がトス → ③ の選択 → アタックで
 });
 
 test('③ でブロックを選ぶと、ネット際で跳ぶだけで爆弾には触らない', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, 'receive');
@@ -350,7 +365,7 @@ test('③ でブロックを選ぶと、ネット際で跳ぶだけで爆弾に�
 });
 
 test('② 時間切れ（味方に任せる）なら味方がレシーブし、自分が自動でトスし、味方がアタックする', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, null);
@@ -362,7 +377,7 @@ test('② 時間切れ（味方に任せる）なら味方がレシーブし、�
 });
 
 test('② でサーブを選ぶと、その場で空振りし、味方がカバーしてレシーブする', () => {
-  const R = newRally(zero);
+  const R = quietRally();
   startPoint(R, 1);
   runUntilChoose(R, 4);
   choose(R, 'serve');
@@ -372,9 +387,8 @@ test('② でサーブを選ぶと、その場で空振りし、味方がカバ�
 });
 
 test('敵がトスを上げた瞬間に ②（アタックが来る）の選択になり、ブロックで止めて相手コートに落とせる', () => {
-  const R = newRally(zero);
-  R.openerIdx = 1;                                         // 敵の 2 番目の打ち方＝トスからアタック
-  startPoint(R, 1);
+  const R = quietRally();
+  enemyAttack(R);
   const c = R.events.find(e => e.type === 'choose');
   eq(c && [c.scene, c.attack], ['incoming', true]);
   choose(R, 'block');
@@ -384,13 +398,43 @@ test('敵がトスを上げた瞬間に ②（アタックが来る）の選択�
   eq(boomSide(ev), 1);
 });
 
-test('爆発したら、取られた側のサーブで次が始まる', () => {
-  const R = newRally(zero);
+// ===== 点数と勝敗 =====
+test('爆発してしばらくすると点が入り、全員が歩いて定位置へ戻ってから、取られた側がサーブする', () => {
+  const R = quietRally();
   startPoint(R, 0);
   choose(R, 'serve');
-  runFor(R, 5 + CFG.afterBoom);                             // 相手コートで爆発 → 敵のサーブ
-  eq(R.actors[2].lastHit !== null || R.ball.held === R.actors[2], true);
+  const ev = runFor(R, 5 + CFG.afterBoom);
+  const p = ev.find(e => e.type === 'point');
+  eq(p && [p.scorer, p.score], [0, [1, 0]]);
+  eq(R.score, [1, 0]);
+  const ev2 = runUntilChoose(R, 8);
+  eq(ev2.some(e => e.type === 'hit' && e.kind === 'serve' && e.actor.team === 1), true, '敵がサーブ');
+  eq(R.choose && R.choose.scene, 'incoming');
 });
+
+test('3 点目で試合が終わり、newGame で 0-0 から自分のサーブで始まる', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  let ev = [];
+  for (let k = 0; k < CFG.winScore; k++) {
+    onFloor(R, { x: 5, z: 0, side: 1 });
+    ev = ev.concat(runFor(R, CFG.explodeDelay + CFG.afterBoom + 0.1));
+  }
+  eq(R.state, 'over');
+  eq(R.winner, 0);
+  eq(ev.some(e => e.type === 'gameover' && e.winner === 0), true);
+  newGame(R);
+  eq([R.score, R.state, R.choose.scene], [[0, 0], 'choose', 'serve']);
+});
+
+test('敵のサーブは 2 人が交代で打つ', () => {
+  const R = quietRally();
+  startPoint(R, 1);
+  const first = R.ball.held;
+  startPoint(R, 1);
+  eq(first !== R.ball.held && first.team === 1 && R.ball.held.team === 1, true);
+});
+
 
 // ===== 結果表示 =====
 (function () {
