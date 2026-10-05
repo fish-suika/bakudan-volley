@@ -39,6 +39,7 @@
   function frame() {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 1 / 30);
+    if (FX.freeze > 0) { FX.freeze -= dt; renderer.render(scene, camera); return; }   // 爆発の瞬間の一瞬の静止
     tickRally(R, dt);
     for (const e of R.events) {
       if (e.type === 'choose') showChoice(e.scene, e.attack);
@@ -53,6 +54,7 @@
       }
       else if (e.type === 'gameover') showResult(e.winner, e.score);
       else if (e.type === 'bump') showToast('ゴツン！', 0.8);
+      else if (e.type === 'crash') FX.shake = Math.min(1.2, FX.shake + 0.35);   // 壁・天井に激突
     }
     R.events.length = 0;
     if (R.state === 'choose') setTimer(R.choose.left / CFG.choiceTime);
@@ -62,7 +64,7 @@
     R.actors.forEach((a, i) => updatePlayer(players[i], a, dt, R.simT, focus));
     updateBombMesh(bombMesh, shown, dt * slow);
     updateFx(dt);
-    updateCamera(dt, R.ball ? R.ball.pos.x : 0);
+    updateCamera(dt, R.ball ? R.ball.pos.x : 0, R.state === 'boom' && R.boom.fired ? R.boom.hit : null);
     renderer.render(scene, camera);
   }
   frame();

@@ -37,6 +37,8 @@
     font-size:clamp(22px,5vw,40px);font-weight:700;letter-spacing:.08em;text-align:center;
     text-shadow:0 2px 16px rgba(0,0,0,.8);opacity:0;transition:opacity .25s;pointer-events:none}
   #toast.on{opacity:1}
+  /* ---- 爆発の白い光 ---- */
+  #flash{position:fixed;inset:0;z-index:4;background:#fff;opacity:0;pointer-events:none}
 
   /* ---- スマホが縦向きのときの案内 ---- */
   #rotate{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:16px;
@@ -72,6 +74,7 @@
 </div>
 <div id="score"><span class="t0">味方</span><b id="s0">0</b><span>-</span><b id="s1">0</b><span class="t1">相手</span></div>
 <div id="result"><h2 id="resultText"></h2><p id="resultScore"></p><button id="againBtn">もう一回</button></div>
+<div id="flash"></div>
 <div id="toast"></div>
 <div id="rotate">横画面にしてください</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
