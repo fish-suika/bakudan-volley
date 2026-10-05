@@ -112,7 +112,21 @@
     return c.attack && Math.random() < 0.4 ? 'block' : 'receive';
   }
 
-  document.getElementById('startBtn').addEventListener('click', startGame);
+  // スマホではじめるとき、全画面にして横向きに固定してみる（Android の Chrome など。できない端末では何もしない。
+  // iPhone の Safari には横固定が無いので、縦向きの案内だけになる）
+  let touched = false;
+  addEventListener('touchstart', () => { touched = true; }, { passive: true });
+  function tryLandscape() {
+    const el = document.documentElement;
+    if (!touched || !el.requestFullscreen) return;
+    el.requestFullscreen().then(() => {
+      if (screen.orientation && screen.orientation.lock) return screen.orientation.lock('landscape');
+    }).catch(() => {});
+  }
+  // スマホが縦向きの間は案内（#rotate）を出して、ゲームを止める（CSS と同じ条件）
+  const portrait = matchMedia('(orientation: portrait) and (pointer: coarse)');
+
+  document.getElementById('startBtn').addEventListener('click', () => { tryLandscape(); startGame(); });
   document.getElementById('againBtn').addEventListener('click', startGame);
   document.getElementById('titleBtn').addEventListener('click', showTitle);
   addEventListener('pointerdown', () => { if (replay) endReplay(); });
@@ -121,7 +135,8 @@
   const clock = new THREE.Clock();
   function frame() {
     requestAnimationFrame(frame);
-    const dt = Math.min(clock.getDelta(), 1 / 30);
+    const dt = Math.min(clock.getDelta(), 1 / 30);       // 止めている間も getDelta は呼ぶ（再開したとき dt が跳ねない）
+    if (portrait.matches) { renderer.render(scene, camera); return; }   // 縦向きの間は止める（案内で隠れている）
     realT += dt;
     if (replay) { stepReplay(dt); stepShift(dt); renderer.render(scene, camera); return; }
     if (FX.freeze > 0) { FX.freeze -= dt; renderer.render(scene, camera); return; }   // 爆発の瞬間の一瞬の静止
