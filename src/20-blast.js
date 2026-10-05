@@ -7,7 +7,7 @@
 // 体ごと飛ばす（今の仕事は捨てる）
 function launch(R, a, vel) {
   const B = CFG.blast;
-  a.task = null; a.stun = 0;
+  a.task = null; a.stun = 0; a.soot = true;   // 吹っ飛んだ人はすすだらけ
   a.fly = {
     pos: { x: a.x, y: a.y + B.center, z: a.z }, vel, rx: 0, rz: 0,
     spinX: (R.rand() - 0.5) * B.spin, spinZ: (R.rand() - 0.5) * B.spin, state: 'air', t: 0, hung: false,
@@ -17,6 +17,7 @@ function launch(R, a, vel) {
 // 爆発（hit = { x, z, side }）で選手を飛ばす。爆発した側は全員、反対側は爆心の近くの人だけ軽く
 function blastActors(R, hit) {
   const B = CFG.blast;
+  for (const a of R.actors) a.soot = false;               // 前の爆発のすすは落ちる（次の爆発まではそのまま）
   for (const a of R.actors) {
     const dx = a.x - hit.x, dz = a.z - hit.z, d = Math.hypot(dx, dz);
     let k;
@@ -77,6 +78,7 @@ function hitWallsBody(a, R, canStick) {
       f.state = 'stick'; f.t = 0;
       v.x = v.y = v.z = 0;
       R.events.push({ type: 'crash', actor: a, x: p.x, y: p.y, z: p.z });
+      R.events.push({ type: 'stick', actor: a, axis: ax, sign: s, x: p.x, y: p.y, z: p.z });   // 壁の人型の跡を残す
       return true;
     }
     v[ax] = -v[ax] * B.bounce;
@@ -119,7 +121,11 @@ function stepFly(a, dt, R) {
   } else if (f.state === 'down') {
     if (f.t > B.downTime) { f.state = 'getup'; f.t = 0; }
   } else if (f.state === 'getup') {
-    if (f.t > B.getupTime) { a.x = p.x; a.z = p.z; a.y = 0; a.vy = 0; a.fly = null; return; }
+    if (f.t > B.getupTime) {
+      a.x = p.x; a.z = p.z; a.y = 0; a.vy = 0; a.fly = null;
+      R.events.push({ type: 'getup', actor: a });
+      return;
+    }
   }
   a.x = p.x; a.z = p.z;
 }

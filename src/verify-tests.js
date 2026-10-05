@@ -761,6 +761,36 @@ test('stepActor：走った距離（stride）・向き（mdx, mdz）・残りの
   near(a.moveLeft, 3 - CFG.runSpeed * 0.2 + CFG.runSpeed / 60, 0.15);
 });
 
+// ===== Phase 5：すす・壁の跡・起き上がり =====
+test('すす：吹っ飛んだ人だけすすだらけ。次の爆発で入れ替わり、newGame で落ちる', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  blastActors(R, { x: 5, z: 0, side: 1 });
+  eq(R.actors.map(a => a.soot), [false, false, true, true]);
+  startPoint(R, 0);
+  eq(R.actors.map(a => a.soot), [false, false, true, true], '次の点の間はそのまま');
+  blastActors(R, { x: -5, z: 0, side: 0 });
+  eq(R.actors.map(a => a.soot), [true, true, false, false], '次の爆発で入れ替わる');
+  newGame(R);
+  eq(R.actors.map(a => a.soot), [false, false, false, false]);
+});
+
+test('すす：飛んできた人に巻き込まれて飛んだ人も、すすだらけ', () => {
+  const a = newActor(0, 0, -5, 0), b = newActor(1, 0, -4, 0), R = soloR(a, b);
+  launch(R, a, { x: 6, y: 0.5, z: 0 });
+  for (let i = 0; i < 20 && !b.fly; i++) { stepFly(a, 1 / 60, R); collideFlyers(R); }
+  eq([a.soot, b.soot], [true, true]);
+});
+
+test('壁に張り付いたら stick（どの壁か）、起き上がったら getup の出来事', () => {
+  const a = newActor(0, 0, -13, 0), R = soloR(a);
+  launch(R, a, { x: -15, y: 3, z: 0 });
+  flyFor(R, a, 4);
+  const s = R.events.find(e => e.type === 'stick');
+  eq(s && [s.axis, s.sign], ['x', -1]);
+  eq(R.events.some(e => e.type === 'getup' && e.actor === a), true);
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');

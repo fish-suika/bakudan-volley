@@ -58,6 +58,7 @@ function serveSpotOf(a) { return { x: -dirOf(a.team) * CFG.serveSpot, z: a.base.
 // 試合を始める（0-0、自分のサーブ）
 function newGame(R) {
   R.score = [0, 0]; R.winner = null;
+  for (const a of R.actors) a.soot = false;
   startPoint(R, 0);
 }
 
