@@ -21,10 +21,12 @@
     return pl;
   });
   const bombMesh = makeBombMesh(scene);
-  initInput(act => choose(R, act));
+  let titleOn = true, replay = null, pendingResult = null, lastBoom = null, realT = 0;
+  const rec = makeRecorder(), CMT = { until: 0, prio: -1, last: '' };
+  initInput(act => { if (!titleOn && !replay) choose(R, act); });
   addEventListener('pointerdown', sndInit);
   addEventListener('keydown', sndInit);
-  window.GAME = { R, choose: act => choose(R, act) };     // 確認用
+  window.GAME = { R, choose: act => choose(R, act), start: () => startGame() };   // 確認用
 
   addEventListener('resize', () => {
     renderer.setSize(innerWidth, innerHeight);
@@ -32,24 +34,76 @@
     camera.updateProjectionMatrix();
   });
 
-  document.getElementById('againBtn').addEventListener('click', () => {
-    hideResult();
+  // 試合を始める（タイトルの「試合開始」・勝敗の画面の「もう一回」）
+  function startGame() {
+    titleOn = false; replay = null; pendingResult = null; lastBoom = null;
+    setTitle(false); setReplayTag(false); hideResult(); hideChoice();
     clearDecals();
-    newGame(R);
+    newGame(R);                                           // 積まれた①の選択は、次のフレームでボタンに出る
     setScore(R.score);
-  });
-  newGame(R);                                             // 0-0、最初のサーブはプレイヤーのチーム
+  }
+  // タイトルへ：後ろで AI どうしの試合を流す
+  function showTitle() {
+    titleOn = true; replay = null; pendingResult = null;
+    setTitle(true); setReplayTag(false); hideResult(); hideChoice();
+    newGame(R);
+    R.events.length = 0;
+  }
+  // リプレイ：爆発の before 秒前から after 秒後までを、speed 倍の速さで、低い角度から見せ直す
+  function startReplay() {
+    const P = CFG.replay;
+    replay = { t: lastBoom.t - P.before, end: lastBoom.t + P.after, boom: lastBoom, fired: false };
+    lastBoom = null;
+    setReplayTag(true); hideChoice();
+  }
+  function endReplay() {
+    replay = null;
+    setReplayTag(false);
+    FX.freeze = 0;
+    if (pendingResult) { showResult(pendingResult.winner, pendingResult.score); pendingResult = null; }
+  }
+  function stepReplay(dt) {
+    const P = CFG.replay, b = replay.boom;
+    replay.t += dt * P.speed;
+    applyFrame(frameAt(rec, replay.t), players, bombMesh);
+    if (!replay.fired && replay.t >= b.t) { replay.fired = true; spawnExplosion(b.x, b.z); FX.freeze = 0; sndBoom(); }
+    updateFx(dt * P.speed);
+    camera.fov = P.fov; camera.updateProjectionMatrix();
+    const sx = b.x < 0 ? 1 : -1;                          // 爆心よりネット寄りの、低い所から
+    camera.position.set(b.x + sx * 5.5, 1.6, b.z + 7);
+    camera.lookAt(b.x, 2.2, b.z);
+    if (replay.t >= replay.end) endReplay();
+  }
+  // タイトル中の試合：プレイヤーの番も、少し待ってから場面に合う行動を自動で選ぶ
+  function demoPick(c) {
+    if (c.scene === 'serve') return 'serve';
+    if (c.scene === 'tossed') return 'attack';
+    return c.attack && Math.random() < 0.4 ? 'block' : 'receive';
+  }
+
+  document.getElementById('startBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+  document.getElementById('titleBtn').addEventListener('click', showTitle);
+  addEventListener('pointerdown', () => { if (replay) endReplay(); });
+  addEventListener('keydown', () => { if (replay) endReplay(); });
+  showTitle();
   const clock = new THREE.Clock();
   function frame() {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 1 / 30);
+    realT += dt;
+    if (replay) { stepReplay(dt); renderer.render(scene, camera); return; }
     if (FX.freeze > 0) { FX.freeze -= dt; renderer.render(scene, camera); return; }   // 爆発の瞬間の一瞬の静止
+    if (titleOn && R.state === 'choose' && R.choose.left < CFG.choiceTime - 0.8) choose(R, demoPick(R.choose));
     tickRally(R, dt);
     for (const e of R.events) {
-      if (e.type === 'choose') { showChoice(e.scene, e.attack); sndSlow(); }
+      const line = pickComment(CMT, e, realT);
+      if (line) showCaption(line);
+      if (e.type === 'choose') { if (!titleOn) { showChoice(e.scene, e.attack); sndSlow(); } }
       else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
       else if (e.type === 'floor') hideChoice();         // 選んでいる途中で床に落ちたら、ボタンを消す
       else if (e.type === 'explode') {
+        lastBoom = { t: realT, x: e.x, z: e.z, side: e.side };
         sndBoom();
         spawnExplosion(e.x, e.z);
         showToast(e.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
@@ -58,8 +112,13 @@
         sndPoint(e.scorer === 0);
         setScore(e.score);
         if (e.score[e.scorer] < CFG.winScore) showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);   // 最後の 1 点は勝敗の画面に任せる
+        if (!titleOn && lastBoom && realT - lastBoom.t < CFG.replay.keep - CFG.replay.after) startReplay();
       }
-      else if (e.type === 'gameover') showResult(e.winner, e.score);
+      else if (e.type === 'gameover') {
+        if (titleOn) newGame(R);                          // タイトル中の試合は、終わったらそのまま次へ
+        else if (replay) pendingResult = e;               // リプレイを見せてから勝敗の画面
+        else showResult(e.winner, e.score);
+      }
       else if (e.type === 'bump') showToast('ゴツン！', 0.8);
       else if (e.type === 'stick') addDecal(e);
       else if (e.type === 'crash') { FX.shake = Math.min(1.2, FX.shake + 0.35); sndCrash(); }   // 壁・天井に激突
@@ -76,6 +135,7 @@
     updateBombMesh(bombMesh, shown, dt * slow);
     updateFx(dt);
     updateCamera(dt, R.ball ? R.ball.pos.x : 0, R.state === 'boom' && R.boom.fired ? R.boom.hit : null);
+    recordFrame(rec, realT, players, bombMesh, CFG.replay.keep);
     renderer.render(scene, camera);
   }
   frame();

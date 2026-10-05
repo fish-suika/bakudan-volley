@@ -61,9 +61,37 @@
   #result p{font-size:20px;letter-spacing:.12em}
   #againBtn{margin-top:8px;font:700 18px var(--jp);letter-spacing:.15em;color:#fff;background:#d8433a;border:0;
     border-radius:28px;padding:12px 34px;cursor:pointer}
+
+  /* ---- 実況テロップ（中継の字幕） ---- */
+  #caption{position:fixed;left:16px;top:56px;z-index:6;max-width:calc(100vw - 32px);display:flex;align-items:stretch;
+    opacity:0;transform:translateX(-12px);transition:opacity .2s,transform .2s;pointer-events:none}
+  #caption.on{opacity:1;transform:none}
+  #caption i{font-style:normal;font-size:11px;letter-spacing:.2em;background:#ffd04a;color:#1a1a1a;padding:6px 8px;display:flex;align-items:center}
+  #caption span{background:rgba(12,18,32,.88);padding:6px 14px;font-size:clamp(14px,2.4vw,18px);letter-spacing:.06em;font-weight:700}
+
+  /* ---- リプレイ ---- */
+  #replayTag{position:fixed;right:16px;top:14px;z-index:8;display:none;flex-direction:column;align-items:flex-end;gap:4px;pointer-events:none}
+  #replayTag.on{display:flex}
+  #replayTag b{background:#d8433a;color:#fff;font-size:18px;letter-spacing:.2em;padding:4px 12px}
+  #replayTag small{font-size:12px;opacity:.85;text-shadow:0 1px 6px #000}
+
+  /* ---- タイトル（真面目なスポーツ中継風。後ろで試合が続いている） ---- */
+  #title{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;justify-content:center;gap:10px;
+    padding:24px max(24px,6vw);background:linear-gradient(90deg,rgba(8,12,22,.92) 0%,rgba(8,12,22,.7) 45%,rgba(8,12,22,.1) 100%)}
+  #title.off{display:none}
+  #title .cup{font-size:clamp(12px,1.8vw,15px);letter-spacing:.25em;color:#ffd04a}
+  #title h1{font-size:clamp(40px,8vw,84px);letter-spacing:.12em;line-height:1.1}
+  #title .sub{font-size:clamp(12px,1.8vw,15px);letter-spacing:.4em;opacity:.75}
+  #title ul{list-style:none;margin:10px 0 6px;font-size:clamp(13px,2vw,16px);line-height:1.9;border-left:3px solid #ffd04a;padding-left:14px}
+  #startBtn,#titleBtn{align-self:flex-start;font:700 18px var(--jp);letter-spacing:.2em;color:#fff;background:#d8433a;border:0;border-radius:4px;
+    padding:12px 40px;cursor:pointer}
+  #title small{font-size:12px;opacity:.6}
+  body.titleMode #score,body.titleMode #actions,body.titleMode #hint,body.titleMode #scene{display:none}
+  #titleBtn{align-self:center;background:transparent;border:2px solid rgba(255,255,255,.6);padding:10px 30px;font-size:15px}
+  body.titleMode #caption{top:auto;bottom:16px;left:auto;right:16px;z-index:21}   /* タイトルの文字と重ならない所へ */
 </style>
 </head>
-<body>
+<body class="titleMode">
 <div id="hint">スローになったら 1〜4 キー（スマホはボタン）で次の行動を選ぶ</div>
 <div id="scene"><span id="sceneText"></span><b id="count"></b></div>
 <div id="actions">
@@ -74,7 +102,21 @@
   <div id="timer"><i></i></div>
 </div>
 <div id="score"><span class="t0">味方</span><b id="s0">0</b><span>-</span><b id="s1">0</b><span class="t1">相手</span></div>
-<div id="result"><h2 id="resultText"></h2><p id="resultScore"></p><button id="againBtn">もう一回</button></div>
+<div id="result"><h2 id="resultText"></h2><p id="resultScore"></p><button id="againBtn">もう一回</button><button id="titleBtn">タイトルへ</button></div>
+<div id="caption"><i>実況</i><span id="captionText"></span></div>
+<div id="replayTag"><b>REPLAY</b><small>タップかキーで飛ばす</small></div>
+<div id="title">
+  <p class="cup">第 1 回 全日本 爆弾バレーボール選手権</p>
+  <h1>爆弾バレー</h1>
+  <p class="sub">BOMB VOLLEYBALL ── 2 vs 2</p>
+  <ul>
+    <li>スローになったら、4 つの行動から次の一手を選ぶ</li>
+    <li>爆弾は、床に落ちた瞬間だけ爆発する</li>
+    <li>相手コートで 3 回爆発させたら勝ち</li>
+  </ul>
+  <button id="startBtn">試合開始</button>
+  <small>PC は 1〜4 キー、スマホは画面下のボタン</small>
+</div>
 <div id="flash"></div>
 <div id="toast"></div>
 <div id="rotate">横画面にしてください</div>
@@ -884,7 +926,7 @@ function collideFlyers(R) {
 }
 // ===== 音（Web Audio で作る。音声ファイルは使わない） =====
 // ブラウザは最初の操作（クリック・タップ・キー）まで音を出せないので、そのときに作る
-const SND = { ctx: null, out: null, noise: null, pink: null, brown: null };
+const SND = { ctx: null, out: null, noise: null, pink: null, brown: null, mute: false };
 
 function sndInit() {
   if (SND.ctx) { if (SND.ctx.state === 'suspended') SND.ctx.resume(); return; }
@@ -902,7 +944,7 @@ function sndInit() {
 
 // 音程のある音（freq から to へ下がる・上がる）
 function sndTone(freq, to, dur, type, vol, delay) {
-  if (!SND.ctx) return;
+  if (!SND.ctx || SND.mute) return;
   const t0 = SND.ctx.currentTime + (delay || 0), o = SND.ctx.createOscillator(), g = SND.ctx.createGain();
   o.type = type; o.frequency.setValueAtTime(freq, t0);
   o.frequency.exponentialRampToValueAtTime(Math.max(20, to), t0 + dur);
@@ -914,7 +956,7 @@ function sndTone(freq, to, dur, type, vol, delay) {
 
 // ざらついた音（フィルタの周波数を from から to へ動かす）
 function sndNoise(dur, vol, filter, from, to, delay) {
-  if (!SND.ctx) return;
+  if (!SND.ctx || SND.mute) return;
   const t0 = SND.ctx.currentTime + (delay || 0), s = SND.ctx.createBufferSource(), f = SND.ctx.createBiquadFilter(), g = SND.ctx.createGain();
   s.buffer = SND.noise;
   f.type = filter; f.frequency.setValueAtTime(from, t0);
@@ -943,7 +985,7 @@ function sndColoredNoise() {
 
 // ザーッを、共鳴しない（Q を低くした）ローパスで短く切って出す
 function sndBurst(buf, dur, vol, from, to, delay) {
-  if (!SND.ctx) return;
+  if (!SND.ctx || SND.mute) return;
   const t0 = SND.ctx.currentTime + (delay || 0), s = SND.ctx.createBufferSource(), f = SND.ctx.createBiquadFilter(), g = SND.ctx.createGain();
   s.buffer = buf;
   f.type = 'lowpass'; f.Q.value = 0.5;
@@ -1904,6 +1946,21 @@ function showResult(winner, s) {
   document.getElementById('result').classList.add('on');
 }
 function hideResult() { document.getElementById('result').classList.remove('on'); }
+
+let __captionTimer = 0;
+function showCaption(text) {
+  document.getElementById('captionText').textContent = text;
+  const el = document.getElementById('caption');
+  el.classList.add('on');
+  clearTimeout(__captionTimer);
+  __captionTimer = setTimeout(() => el.classList.remove('on'), CFG.comment.hold * 1000);
+}
+function setReplayTag(on) { document.getElementById('replayTag').classList.toggle('on', on); }
+function setTitle(on) {
+  document.getElementById('title').classList.toggle('off', !on);
+  document.body.classList.toggle('titleMode', on);
+  SND.mute = on;                                          // タイトルの後ろの試合では音を鳴らさない
+}
 // ===== 起動とメインループ =====
 (function boot() {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1927,10 +1984,12 @@ function hideResult() { document.getElementById('result').classList.remove('on')
     return pl;
   });
   const bombMesh = makeBombMesh(scene);
-  initInput(act => choose(R, act));
+  let titleOn = true, replay = null, pendingResult = null, lastBoom = null, realT = 0;
+  const rec = makeRecorder(), CMT = { until: 0, prio: -1, last: '' };
+  initInput(act => { if (!titleOn && !replay) choose(R, act); });
   addEventListener('pointerdown', sndInit);
   addEventListener('keydown', sndInit);
-  window.GAME = { R, choose: act => choose(R, act) };     // 確認用
+  window.GAME = { R, choose: act => choose(R, act), start: () => startGame() };   // 確認用
 
   addEventListener('resize', () => {
     renderer.setSize(innerWidth, innerHeight);
@@ -1938,24 +1997,76 @@ function hideResult() { document.getElementById('result').classList.remove('on')
     camera.updateProjectionMatrix();
   });
 
-  document.getElementById('againBtn').addEventListener('click', () => {
-    hideResult();
+  // 試合を始める（タイトルの「試合開始」・勝敗の画面の「もう一回」）
+  function startGame() {
+    titleOn = false; replay = null; pendingResult = null; lastBoom = null;
+    setTitle(false); setReplayTag(false); hideResult(); hideChoice();
     clearDecals();
-    newGame(R);
+    newGame(R);                                           // 積まれた①の選択は、次のフレームでボタンに出る
     setScore(R.score);
-  });
-  newGame(R);                                             // 0-0、最初のサーブはプレイヤーのチーム
+  }
+  // タイトルへ：後ろで AI どうしの試合を流す
+  function showTitle() {
+    titleOn = true; replay = null; pendingResult = null;
+    setTitle(true); setReplayTag(false); hideResult(); hideChoice();
+    newGame(R);
+    R.events.length = 0;
+  }
+  // リプレイ：爆発の before 秒前から after 秒後までを、speed 倍の速さで、低い角度から見せ直す
+  function startReplay() {
+    const P = CFG.replay;
+    replay = { t: lastBoom.t - P.before, end: lastBoom.t + P.after, boom: lastBoom, fired: false };
+    lastBoom = null;
+    setReplayTag(true); hideChoice();
+  }
+  function endReplay() {
+    replay = null;
+    setReplayTag(false);
+    FX.freeze = 0;
+    if (pendingResult) { showResult(pendingResult.winner, pendingResult.score); pendingResult = null; }
+  }
+  function stepReplay(dt) {
+    const P = CFG.replay, b = replay.boom;
+    replay.t += dt * P.speed;
+    applyFrame(frameAt(rec, replay.t), players, bombMesh);
+    if (!replay.fired && replay.t >= b.t) { replay.fired = true; spawnExplosion(b.x, b.z); FX.freeze = 0; sndBoom(); }
+    updateFx(dt * P.speed);
+    camera.fov = P.fov; camera.updateProjectionMatrix();
+    const sx = b.x < 0 ? 1 : -1;                          // 爆心よりネット寄りの、低い所から
+    camera.position.set(b.x + sx * 5.5, 1.6, b.z + 7);
+    camera.lookAt(b.x, 2.2, b.z);
+    if (replay.t >= replay.end) endReplay();
+  }
+  // タイトル中の試合：プレイヤーの番も、少し待ってから場面に合う行動を自動で選ぶ
+  function demoPick(c) {
+    if (c.scene === 'serve') return 'serve';
+    if (c.scene === 'tossed') return 'attack';
+    return c.attack && Math.random() < 0.4 ? 'block' : 'receive';
+  }
+
+  document.getElementById('startBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+  document.getElementById('titleBtn').addEventListener('click', showTitle);
+  addEventListener('pointerdown', () => { if (replay) endReplay(); });
+  addEventListener('keydown', () => { if (replay) endReplay(); });
+  showTitle();
   const clock = new THREE.Clock();
   function frame() {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 1 / 30);
+    realT += dt;
+    if (replay) { stepReplay(dt); renderer.render(scene, camera); return; }
     if (FX.freeze > 0) { FX.freeze -= dt; renderer.render(scene, camera); return; }   // 爆発の瞬間の一瞬の静止
+    if (titleOn && R.state === 'choose' && R.choose.left < CFG.choiceTime - 0.8) choose(R, demoPick(R.choose));
     tickRally(R, dt);
     for (const e of R.events) {
-      if (e.type === 'choose') { showChoice(e.scene, e.attack); sndSlow(); }
+      const line = pickComment(CMT, e, realT);
+      if (line) showCaption(line);
+      if (e.type === 'choose') { if (!titleOn) { showChoice(e.scene, e.attack); sndSlow(); } }
       else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
       else if (e.type === 'floor') hideChoice();         // 選んでいる途中で床に落ちたら、ボタンを消す
       else if (e.type === 'explode') {
+        lastBoom = { t: realT, x: e.x, z: e.z, side: e.side };
         sndBoom();
         spawnExplosion(e.x, e.z);
         showToast(e.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
@@ -1964,8 +2075,13 @@ function hideResult() { document.getElementById('result').classList.remove('on')
         sndPoint(e.scorer === 0);
         setScore(e.score);
         if (e.score[e.scorer] < CFG.winScore) showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);   // 最後の 1 点は勝敗の画面に任せる
+        if (!titleOn && lastBoom && realT - lastBoom.t < CFG.replay.keep - CFG.replay.after) startReplay();
       }
-      else if (e.type === 'gameover') showResult(e.winner, e.score);
+      else if (e.type === 'gameover') {
+        if (titleOn) newGame(R);                          // タイトル中の試合は、終わったらそのまま次へ
+        else if (replay) pendingResult = e;               // リプレイを見せてから勝敗の画面
+        else showResult(e.winner, e.score);
+      }
       else if (e.type === 'bump') showToast('ゴツン！', 0.8);
       else if (e.type === 'stick') addDecal(e);
       else if (e.type === 'crash') { FX.shake = Math.min(1.2, FX.shake + 0.35); sndCrash(); }   // 壁・天井に激突
@@ -1982,6 +2098,7 @@ function hideResult() { document.getElementById('result').classList.remove('on')
     updateBombMesh(bombMesh, shown, dt * slow);
     updateFx(dt);
     updateCamera(dt, R.ball ? R.ball.pos.x : 0, R.state === 'boom' && R.boom.fired ? R.boom.hit : null);
+    recordFrame(rec, realT, players, bombMesh, CFG.replay.keep);
     renderer.render(scene, camera);
   }
   frame();

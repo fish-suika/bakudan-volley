@@ -61,9 +61,37 @@
   #result p{font-size:20px;letter-spacing:.12em}
   #againBtn{margin-top:8px;font:700 18px var(--jp);letter-spacing:.15em;color:#fff;background:#d8433a;border:0;
     border-radius:28px;padding:12px 34px;cursor:pointer}
+
+  /* ---- 実況テロップ（中継の字幕） ---- */
+  #caption{position:fixed;left:16px;top:56px;z-index:6;max-width:calc(100vw - 32px);display:flex;align-items:stretch;
+    opacity:0;transform:translateX(-12px);transition:opacity .2s,transform .2s;pointer-events:none}
+  #caption.on{opacity:1;transform:none}
+  #caption i{font-style:normal;font-size:11px;letter-spacing:.2em;background:#ffd04a;color:#1a1a1a;padding:6px 8px;display:flex;align-items:center}
+  #caption span{background:rgba(12,18,32,.88);padding:6px 14px;font-size:clamp(14px,2.4vw,18px);letter-spacing:.06em;font-weight:700}
+
+  /* ---- リプレイ ---- */
+  #replayTag{position:fixed;right:16px;top:14px;z-index:8;display:none;flex-direction:column;align-items:flex-end;gap:4px;pointer-events:none}
+  #replayTag.on{display:flex}
+  #replayTag b{background:#d8433a;color:#fff;font-size:18px;letter-spacing:.2em;padding:4px 12px}
+  #replayTag small{font-size:12px;opacity:.85;text-shadow:0 1px 6px #000}
+
+  /* ---- タイトル（真面目なスポーツ中継風。後ろで試合が続いている） ---- */
+  #title{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;justify-content:center;gap:10px;
+    padding:24px max(24px,6vw);background:linear-gradient(90deg,rgba(8,12,22,.92) 0%,rgba(8,12,22,.7) 45%,rgba(8,12,22,.1) 100%)}
+  #title.off{display:none}
+  #title .cup{font-size:clamp(12px,1.8vw,15px);letter-spacing:.25em;color:#ffd04a}
+  #title h1{font-size:clamp(40px,8vw,84px);letter-spacing:.12em;line-height:1.1}
+  #title .sub{font-size:clamp(12px,1.8vw,15px);letter-spacing:.4em;opacity:.75}
+  #title ul{list-style:none;margin:10px 0 6px;font-size:clamp(13px,2vw,16px);line-height:1.9;border-left:3px solid #ffd04a;padding-left:14px}
+  #startBtn,#titleBtn{align-self:flex-start;font:700 18px var(--jp);letter-spacing:.2em;color:#fff;background:#d8433a;border:0;border-radius:4px;
+    padding:12px 40px;cursor:pointer}
+  #title small{font-size:12px;opacity:.6}
+  body.titleMode #score,body.titleMode #actions,body.titleMode #hint,body.titleMode #scene{display:none}
+  #titleBtn{align-self:center;background:transparent;border:2px solid rgba(255,255,255,.6);padding:10px 30px;font-size:15px}
+  body.titleMode #caption{top:auto;bottom:16px;left:auto;right:16px;z-index:21}   /* タイトルの文字と重ならない所へ */
 </style>
 </head>
-<body>
+<body class="titleMode">
 <div id="hint">スローになったら 1〜4 キー（スマホはボタン）で次の行動を選ぶ</div>
 <div id="scene"><span id="sceneText"></span><b id="count"></b></div>
 <div id="actions">
@@ -74,7 +102,21 @@
   <div id="timer"><i></i></div>
 </div>
 <div id="score"><span class="t0">味方</span><b id="s0">0</b><span>-</span><b id="s1">0</b><span class="t1">相手</span></div>
-<div id="result"><h2 id="resultText"></h2><p id="resultScore"></p><button id="againBtn">もう一回</button></div>
+<div id="result"><h2 id="resultText"></h2><p id="resultScore"></p><button id="againBtn">もう一回</button><button id="titleBtn">タイトルへ</button></div>
+<div id="caption"><i>実況</i><span id="captionText"></span></div>
+<div id="replayTag"><b>REPLAY</b><small>タップかキーで飛ばす</small></div>
+<div id="title">
+  <p class="cup">第 1 回 全日本 爆弾バレーボール選手権</p>
+  <h1>爆弾バレー</h1>
+  <p class="sub">BOMB VOLLEYBALL ── 2 vs 2</p>
+  <ul>
+    <li>スローになったら、4 つの行動から次の一手を選ぶ</li>
+    <li>爆弾は、床に落ちた瞬間だけ爆発する</li>
+    <li>相手コートで 3 回爆発させたら勝ち</li>
+  </ul>
+  <button id="startBtn">試合開始</button>
+  <small>PC は 1〜4 キー、スマホは画面下のボタン</small>
+</div>
 <div id="flash"></div>
 <div id="toast"></div>
 <div id="rotate">横画面にしてください</div>

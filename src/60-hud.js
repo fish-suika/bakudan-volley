@@ -37,3 +37,18 @@ function showResult(winner, s) {
   document.getElementById('result').classList.add('on');
 }
 function hideResult() { document.getElementById('result').classList.remove('on'); }
+
+let __captionTimer = 0;
+function showCaption(text) {
+  document.getElementById('captionText').textContent = text;
+  const el = document.getElementById('caption');
+  el.classList.add('on');
+  clearTimeout(__captionTimer);
+  __captionTimer = setTimeout(() => el.classList.remove('on'), CFG.comment.hold * 1000);
+}
+function setReplayTag(on) { document.getElementById('replayTag').classList.toggle('on', on); }
+function setTitle(on) {
+  document.getElementById('title').classList.toggle('off', !on);
+  document.body.classList.toggle('titleMode', on);
+  SND.mute = on;                                          // タイトルの後ろの試合では音を鳴らさない
+}

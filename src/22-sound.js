@@ -1,6 +1,6 @@
 // ===== 音（Web Audio で作る。音声ファイルは使わない） =====
 // ブラウザは最初の操作（クリック・タップ・キー）まで音を出せないので、そのときに作る
-const SND = { ctx: null, out: null, noise: null, pink: null, brown: null };
+const SND = { ctx: null, out: null, noise: null, pink: null, brown: null, mute: false };
 
 function sndInit() {
   if (SND.ctx) { if (SND.ctx.state === 'suspended') SND.ctx.resume(); return; }
@@ -18,7 +18,7 @@ function sndInit() {
 
 // 音程のある音（freq から to へ下がる・上がる）
 function sndTone(freq, to, dur, type, vol, delay) {
-  if (!SND.ctx) return;
+  if (!SND.ctx || SND.mute) return;
   const t0 = SND.ctx.currentTime + (delay || 0), o = SND.ctx.createOscillator(), g = SND.ctx.createGain();
   o.type = type; o.frequency.setValueAtTime(freq, t0);
   o.frequency.exponentialRampToValueAtTime(Math.max(20, to), t0 + dur);
@@ -30,7 +30,7 @@ function sndTone(freq, to, dur, type, vol, delay) {
 
 // ざらついた音（フィルタの周波数を from から to へ動かす）
 function sndNoise(dur, vol, filter, from, to, delay) {
-  if (!SND.ctx) return;
+  if (!SND.ctx || SND.mute) return;
   const t0 = SND.ctx.currentTime + (delay || 0), s = SND.ctx.createBufferSource(), f = SND.ctx.createBiquadFilter(), g = SND.ctx.createGain();
   s.buffer = SND.noise;
   f.type = filter; f.frequency.setValueAtTime(from, t0);
@@ -59,7 +59,7 @@ function sndColoredNoise() {
 
 // ザーッを、共鳴しない（Q を低くした）ローパスで短く切って出す
 function sndBurst(buf, dur, vol, from, to, delay) {
-  if (!SND.ctx) return;
+  if (!SND.ctx || SND.mute) return;
   const t0 = SND.ctx.currentTime + (delay || 0), s = SND.ctx.createBufferSource(), f = SND.ctx.createBiquadFilter(), g = SND.ctx.createGain();
   s.buffer = buf;
   f.type = 'lowpass'; f.Q.value = 0.5;
