@@ -2,7 +2,7 @@
 // actor = { id, team, x, z, y（跳んでいる高さ）, vy, home（仕事が無いとき戻る所）, base（定位置）, task, moving, lastHit }
 // task  = { kind, ok, contact, h, at, pending, jump, jumpAt, jumped, jumpOnArrive, whiff, end, then, target, hold, contactAt, start }
 function newActor(id, team, x, z) {
-  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null };
+  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null, stun: 0 };
 }
 function dirOf(team) { return team === 0 ? 1 : -1; }      // 相手コートの向き（x の符号）
 function riseTime() { return Math.sqrt(2 * CFG.jumpH / CFG.gravity); }   // 踏み切ってから最高点まで
@@ -17,7 +17,9 @@ function stepActor(a, dt, simT) {
   }
   const g = t ? t.at : a.home;
   a.moving = false;
-  if (a.y === 0) {
+  if (a.stun > 0) a.stun = Math.max(0, a.stun - dt);
+  const waiting = t && t.delay && simT < t.start + t.delay;   // 反応が遅れて、まだ動き出さない
+  if (a.y === 0 && !waiting && !(a.stun > 0)) {
     const dx = g.x - a.x, dz = g.z - a.z, d = Math.hypot(dx, dz), step = CFG.runSpeed * dt;
     if (d > 0.02) {
       a.moving = true;
@@ -50,4 +52,23 @@ function checkContact(a, ball) {
   if (Math.hypot(p.x - a.x, p.z - a.z) <= CFG.reach) return t.whiff ? 'miss' : 'hit';
   if (p.y < t.h - 0.6) return 'miss';
   return null;
+}
+
+// 選手どうしが重ならないよう押し合う。2 人とも爆弾へ走っていてぶつかったら、よろけて少し動けない
+function separateActors(R) {
+  const A = R.actors, min = CFG.player.r * 2;
+  for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
+    const a = A[i], b = A[j];
+    if (a.y > 0 || b.y > 0) continue;
+    const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
+    if (d >= min) continue;
+    const nx = d > 1e-6 ? dx / d : 1, nz = d > 1e-6 ? dz / d : 0, push = (min - d) / 2;
+    a.x -= nx * push; a.z -= nz * push;
+    b.x += nx * push; b.z += nz * push;
+    const chasing = o => o.task && o.task.contact && o.moving && !(o.stun > 0);
+    if (chasing(a) && chasing(b)) {
+      a.stun = b.stun = CFG.ai.bumpStun;
+      R.events.push({ type: 'bump', a, b });
+    }
+  }
 }

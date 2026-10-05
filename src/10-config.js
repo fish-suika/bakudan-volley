@@ -32,7 +32,17 @@ const CFG = {
     incoming: { receive: 0.9, directSoft: 0.7, directHard: 0.25, block: 0.6 },
     tossed: { receive: 0.95, attack: 0.9 },
   },
-  ai: { receive: 0.85, toss: 0.9, attack: 0.8, serve: 0.9 },
-  enemyOpeners: ['serve', 'attack'],                      // Phase 2 の試し：敵は サーブ → トスからアタック を交互に打つ
+  ai: {                                                   // 味方と敵の AI（ミスの確率は両チーム同じ）
+    receive: 0.85, dig: 0.45, toss: 0.9, attack: 0.8, serve: 0.9, block: 0.5,   // 成功率（dig は強い球のレシーブ）
+    blockTry: 0.35,                                       // 相手のアタックにブロックへ跳ぶ確率
+    delay: [0.05, 0.3], slowChance: 0.15, slowDelay: 0.5, // 反応の遅れ（秒）。slowChance の確率でさらに slowDelay 遅れる
+    bothGo: 0.12,                                         // 2 人とも同じ球へ向かってしまう確率
+    earlyJump: 0.1,                                       // アタックでジャンプが早すぎて空振りする確率
+    bumpStun: 0.7,                                        // ぶつかったときによろけて動けない時間（秒）
+  },
+  // ---- Phase 3：ラリーと点数 ----
+  winScore: 3,                                            // 先に取ったほうの勝ち
+  resetMax: 3.0,                                          // 点が決まってから、定位置へ戻るのを待つ最長（秒）
+  enemyOpeners: ['serve', 'attack'],                      // Phase 2 の試し（Task 2 で消す）
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
 };

@@ -211,6 +211,42 @@ test('ブロックは手の範囲に触れたときだけ止める', () => {
   b.pos = { x: -0.35, y: 3.8, z: 0 }; eq(checkContact(a, b), null, '手より上');
 });
 
+test('stepActor: task.delay の間は動き出さない（反応の遅れ）', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -2, z: 0 }, delay: 0.3, start: 0 };
+  stepFor(a, 0.2);
+  eq(a.x, -5, 'まだ動かない');
+  stepFor(a, 0.5);                                         // stepFor は時刻を 0 から数え直すので、遅れ（0.3 秒）より長く進める
+  eq(a.x > -5, true, '動き出した');
+});
+
+test('stepActor: stun の間は動けず、時間がたつと戻る', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -2, z: 0 } };
+  a.stun = 0.5;
+  stepFor(a, 0.4);
+  eq(a.x, -5);
+  stepFor(a, 0.3);
+  eq(a.stun, 0);
+  eq(a.x > -5, true);
+});
+
+test('separateActors: 重なった選手は押し合って離れ、2 人とも爆弾へ走っていたらぶつかってよろける', () => {
+  const R = { actors: [newActor(0, 0, -3, 0), newActor(1, 0, -2.6, 0)], events: [] };
+  const [a, b] = R.actors;
+  a.task = { kind: 'receive', contact: true, at: { x: 0, z: 0 } }; a.moving = true;
+  b.task = { kind: 'receive', contact: true, at: { x: 0, z: 0 } }; b.moving = true;
+  separateActors(R);
+  near(Math.hypot(a.x - b.x, a.z - b.z), CFG.player.r * 2, 0.001, '離れた');
+  eq(a.stun > 0 && b.stun > 0, true, 'よろけた');
+  eq(R.events.some(e => e.type === 'bump'), true);
+  a.stun = b.stun = 0; a.task = null;
+  a.x = -3; b.x = -2.6;
+  R.events.length = 0;
+  separateActors(R);
+  eq(R.events.length, 0, '片方だけなら押し合うだけ');
+});
+
 // ===== ラリー =====
 const zero = () => 0;
 function runFor(R, sec) {
