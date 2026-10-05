@@ -28,16 +28,33 @@
   addEventListener('keydown', sndInit);
   window.GAME = { R, choose: act => choose(R, act), start: () => startGame() };   // 確認用
 
-  addEventListener('resize', () => {
+  // ボタンの高さぶん、コートの絵を上へずらす（スマホの横画面では、ボタンがコートの手前に重なって動きが見えにくかった）。
+  // 映す窓を下へずらすと、絵は上へ動く（大きさは変わらない）
+  // 爆発の間・リプレイ中・タイトルはボタンを使わないので、ずらさずに上（天井まで飛ぶ人）まで見せる
+  let baseShift = 0, viewShift = 0;
+  function layoutView() {
     renderer.setSize(innerWidth, innerHeight);
+    baseShift = Math.round(document.getElementById('actions').offsetHeight * 0.7);
     camera.aspect = innerWidth / innerHeight;
+    applyShift();
+  }
+  function applyShift() {
+    camera.setViewOffset(innerWidth, innerHeight, 0, Math.round(viewShift), innerWidth, innerHeight);
     camera.updateProjectionMatrix();
-  });
+  }
+  function stepShift(dt) {
+    const want = titleOn || replay || R.state === 'boom' || R.state === 'over' ? 0 : baseShift;
+    if (Math.abs(want - viewShift) < 0.5) return;
+    viewShift += (want - viewShift) * Math.min(1, dt * 3);
+    applyShift();
+  }
+  addEventListener('resize', layoutView);
 
   // 試合を始める（タイトルの「試合開始」・勝敗の画面の「もう一回」）
   function startGame() {
     titleOn = false; replay = null; pendingResult = null; lastBoom = null;
     setTitle(false); setReplayTag(false); hideResult(); hideChoice();
+    layoutView();
     clearDecals();
     newGame(R);                                           // 先攻はランダム。味方なら積まれた①の選択が、次のフレームでボタンに出る
     showToast(R.ball.held.team === 0 ? '先攻：味方チームのサーブ' : '先攻：相手チームのサーブ', 1.8);
@@ -47,6 +64,7 @@
   function showTitle() {
     titleOn = true; replay = null; pendingResult = null;
     setTitle(true); setReplayTag(false); hideResult(); hideChoice();
+    layoutView();
     newGame(R);
     R.events.length = 0;
   }
@@ -105,7 +123,7 @@
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 1 / 30);
     realT += dt;
-    if (replay) { stepReplay(dt); renderer.render(scene, camera); return; }
+    if (replay) { stepReplay(dt); stepShift(dt); renderer.render(scene, camera); return; }
     if (FX.freeze > 0) { FX.freeze -= dt; renderer.render(scene, camera); return; }   // 爆発の瞬間の一瞬の静止
     if (titleOn && R.state === 'choose' && R.choose.left < CFG.choiceTime - 0.8) choose(R, demoPick(R.choose));
     tickRally(R, dt);
@@ -148,6 +166,7 @@
     updateBombMesh(bombMesh, shown, dt * slow);
     updateFx(dt);
     updateCamera(dt, R.ball ? R.ball.pos.x : 0, R.state === 'boom' && R.boom.fired ? R.boom.hit : null);
+    stepShift(dt);
     recordFrame(rec, realT, players, bombMesh, CFG.replay.keep);
     renderer.render(scene, camera);
   }

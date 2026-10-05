@@ -96,6 +96,19 @@
   body.titleMode #score,body.titleMode #actions,body.titleMode #hint,body.titleMode #scene{display:none}
   #titleBtn{align-self:center;background:transparent;border:2px solid rgba(255,255,255,.6);padding:10px 30px;font-size:15px}
   body.titleMode #caption{top:auto;bottom:16px;left:auto;right:16px;z-index:21}   /* タイトルの文字と重ならない所へ */
+
+  /* ---- スマホの横画面（高さが低い）：実況は左上の点数の横へ小さく、お知らせは少し下へ。重ならないように ---- */
+  @media (max-height:500px){
+    #hint{display:none}
+    #score{top:8px;padding:4px 12px;font-size:13px}
+    #score b{font-size:20px}
+    #caption{top:8px;left:10px;max-width:calc(50vw - 100px)}
+    #caption i{font-size:10px;padding:4px 6px}
+    #caption span{font-size:13px;padding:4px 10px}
+    #toast{top:34%;font-size:clamp(18px,4.5vw,28px)}
+    #replayTag{top:8px;right:10px}
+    #replayTag b{font-size:14px}
+  }
 </style>
 </head>
 <body class="titleMode">
