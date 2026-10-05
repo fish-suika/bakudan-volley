@@ -43,5 +43,21 @@ const CFG = {
   // ---- Phase 3：ラリーと点数 ----
   winScore: 3,                                            // 先に取ったほうの勝ち
   resetMax: 3.0,                                          // 点が決まってから、定位置へ戻るのを待つ最長（秒）
+  // ---- Phase 4a：吹っ飛び・爆発 ----
+  blast: {
+    radius: 12, minPower: 0.45,                           // 爆発した側：中心から遠いほど弱まるが、最低でもこの強さで飛ぶ
+    nearRadius: 4, nearPower: 0.4,                        // 反対側：この距離以内なら軽く飛ぶ
+    speed: 11, up: 13, jitter: 0.35,                      // 横・上の初速（強さ 1 のとき m/s）と毎回のばらつき（±35%）
+    superChance: 0.15, superMul: 1.7,                     // たまに 1 人だけ異常に高く飛ぶ（上の初速が 1.7 倍）
+    spin: 14,                                             // 空中で回る速さの幅（rad/s）
+    center: 1.0, r: 0.45,                                 // 体の中心の高さ、体の当たり判定（球）の半径
+    bounce: 0.45, floorBounce: 0.3, landSpeed: 4,         // 跳ね返り。床へ秒速 landSpeed 以上で落ちたら弾む
+    friction: 4,                                          // 床を滑るときの減速 m/s²（秒速 8m なら 8m 滑る）
+    stickSpeed: 5, stickTime: 0.35, slideDown: 1.8,       // この速さ以上で壁に当たると張り付き、少ししてずり落ちる
+    netHang: 0.25, hangTime: 1.0,                         // ネットに引っかかる確率と、ぶら下がる時間
+    downTime: 0.8, getupTime: 0.6,                        // 倒れている時間、起き上がるのにかかる時間
+    maxTime: 7,                                           // 爆発からこれ以上は待たずに点を進める（秒）
+  },
+  fx: { freeze: 0.12 },                                   // 爆発の瞬間に画面を止める時間（秒）
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
 };

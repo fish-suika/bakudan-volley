@@ -66,6 +66,22 @@ const CFG = {
   // ---- Phase 3：ラリーと点数 ----
   winScore: 3,                                            // 先に取ったほうの勝ち
   resetMax: 3.0,                                          // 点が決まってから、定位置へ戻るのを待つ最長（秒）
+  // ---- Phase 4a：吹っ飛び・爆発 ----
+  blast: {
+    radius: 12, minPower: 0.45,                           // 爆発した側：中心から遠いほど弱まるが、最低でもこの強さで飛ぶ
+    nearRadius: 4, nearPower: 0.4,                        // 反対側：この距離以内なら軽く飛ぶ
+    speed: 11, up: 13, jitter: 0.35,                      // 横・上の初速（強さ 1 のとき m/s）と毎回のばらつき（±35%）
+    superChance: 0.15, superMul: 1.7,                     // たまに 1 人だけ異常に高く飛ぶ（上の初速が 1.7 倍）
+    spin: 14,                                             // 空中で回る速さの幅（rad/s）
+    center: 1.0, r: 0.45,                                 // 体の中心の高さ、体の当たり判定（球）の半径
+    bounce: 0.45, floorBounce: 0.3, landSpeed: 4,         // 跳ね返り。床へ秒速 landSpeed 以上で落ちたら弾む
+    friction: 4,                                          // 床を滑るときの減速 m/s²（秒速 8m なら 8m 滑る）
+    stickSpeed: 5, stickTime: 0.35, slideDown: 1.8,       // この速さ以上で壁に当たると張り付き、少ししてずり落ちる
+    netHang: 0.25, hangTime: 1.0,                         // ネットに引っかかる確率と、ぶら下がる時間
+    downTime: 0.8, getupTime: 0.6,                        // 倒れている時間、起き上がるのにかかる時間
+    maxTime: 7,                                           // 爆発からこれ以上は待たずに点を進める（秒）
+  },
+  fx: { freeze: 0.12 },                                   // 爆発の瞬間に画面を止める時間（秒）
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25 },
 };
 // ===== 爆弾の物理（three.js 非依存） =====
@@ -201,7 +217,7 @@ function spikeVelocity(from, to, speed) {
 // actor = { id, team, x, z, y（跳んでいる高さ）, vy, home（仕事が無いとき戻る所）, base（定位置）, task, moving, lastHit }
 // task  = { kind, ok, contact, h, at, pending, jump, jumpAt, jumped, jumpOnArrive, whiff, end, then, target, hold, contactAt, start }
 function newActor(id, team, x, z) {
-  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null, stun: 0 };
+  return { id, team, x, z, y: 0, vy: 0, home: { x, z }, base: { x, z }, task: null, moving: false, lastHit: null, stun: 0, fly: null };
 }
 function dirOf(team) { return team === 0 ? 1 : -1; }      // 相手コートの向き（x の符号）
 function riseTime() { return Math.sqrt(2 * CFG.jumpH / CFG.gravity); }   // 踏み切ってから最高点まで
@@ -597,6 +613,155 @@ function tickRally(R, realDt) {
     R.resetT += realDt;
     const home = R.actors.every(a => Math.hypot(a.x - a.home.x, a.z - a.home.z) < 0.05);
     if (home || R.resetT > CFG.resetMax) startServe(R, R.nextServe);
+  }
+}
+// ===== 吹っ飛び（three.js 非依存） =====
+// 爆発で選手を体ごと飛ばす。体は中心の高さ center・半径 r の球として、天井・壁・床・ネット・他の選手に当たる
+// actor.fly = { pos（体の中心）, vel, rx, rz（回転）, spinX, spinZ, state, t, hung }
+// state: 'air' 飛んでいる / 'stick' 壁に張り付き→ずり落ちる / 'slide' 床を滑る / 'hang' ネットにぶら下がる / 'down' 倒れている / 'getup' 起き上がる
+// 起き上がり終わると actor.fly は null に戻り、普段の動き（stepActor）に戻る
+
+// 体ごと飛ばす（今の仕事は捨てる）
+function launch(R, a, vel) {
+  const B = CFG.blast;
+  a.task = null; a.stun = 0;
+  a.fly = {
+    pos: { x: a.x, y: a.y + B.center, z: a.z }, vel, rx: 0, rz: 0,
+    spinX: (R.rand() - 0.5) * B.spin, spinZ: (R.rand() - 0.5) * B.spin, state: 'air', t: 0, hung: false,
+  };
+}
+
+// 爆発（hit = { x, z, side }）で選手を飛ばす。爆発した側は全員、反対側は爆心の近くの人だけ軽く
+function blastActors(R, hit) {
+  const B = CFG.blast;
+  for (const a of R.actors) {
+    const dx = a.x - hit.x, dz = a.z - hit.z, d = Math.hypot(dx, dz);
+    let k;
+    if (a.team === hit.side) k = Math.max(B.minPower, 1 - d / B.radius);
+    else if (d < B.nearRadius) k = B.nearPower * (1 - d / B.nearRadius);
+    else continue;
+    let nx, nz;
+    if (d > 0.1) { nx = dx / d; nz = dz / d; }
+    else { const ang = R.rand() * Math.PI * 2; nx = Math.cos(ang); nz = Math.sin(ang); }   // 真上で爆発したら向きはでたらめ
+    const jit = () => 1 + (R.rand() - 0.5) * 2 * B.jitter;
+    const side = B.speed * k * jit();
+    const up = B.up * k * jit() * (mishap(R, B.superChance) ? B.superMul : 1);
+    launch(R, a, { x: nx * side, y: up, z: nz * side });
+  }
+}
+
+// 体とネット（白帯から下 1m の薄い板）。引っかかったら true
+function hitNetBody(a, R) {
+  const f = a.fly, p = f.pos, v = f.vel, N = CFG.net, B = CFG.blast, r = B.r;
+  const dx = p.x - clamp(p.x, -N.thick / 2, N.thick / 2);
+  const dy = p.y - clamp(p.y, N.bottom, N.top);
+  const dz = p.z - clamp(p.z, -N.halfWid, N.halfWid);
+  const d = Math.hypot(dx, dy, dz);
+  if (d >= r) return false;
+  const side = p.x < 0 ? -1 : 1;
+  if (!f.hung && mishap(R, B.netHang)) {                  // ネットに引っかかってぶら下がる
+    f.hung = true; f.state = 'hang'; f.t = 0;
+    p.x = side * 0.3; p.y = N.top - 0.35; p.z = clamp(p.z, -N.halfWid + 0.5, N.halfWid - 0.5);
+    v.x = v.y = v.z = 0;
+    R.events.push({ type: 'net', actor: a });
+    return true;
+  }
+  if (d < 1e-6) {                                         // 中心がネットの中：来た側へ押し出す
+    p.x = side * (N.thick / 2 + r);
+    if (v.x * side < 0) v.x = -v.x * B.bounce;
+    return false;
+  }
+  const k = (r - d) / d;
+  p.x += dx * k; p.y += dy * k; p.z += dz * k;
+  const nx = dx / d, ny = dy / d, nz = dz / d, vn = v.x * nx + v.y * ny + v.z * nz;
+  if (vn < 0) { const j = (1 + B.bounce) * vn; v.x -= j * nx; v.y -= j * ny; v.z -= j * nz; }
+  return false;
+}
+
+// 壁（x=±halfX, z=±halfZ）。速く当たったら張り付く（true）、遅ければ跳ね返る
+function hitWallsBody(a, R, canStick) {
+  const f = a.fly, p = f.pos, v = f.vel, G = CFG.gym, B = CFG.blast;
+  for (const [ax, lim] of [['x', G.halfX], ['z', G.halfZ]]) {
+    if (Math.abs(p[ax]) + B.r <= lim) continue;
+    const s = Math.sign(p[ax]);
+    p[ax] = s * (lim - B.r);
+    if (v[ax] * s <= 0) continue;                         // 離れていく向き
+    if (canStick && Math.abs(v[ax]) > B.stickSpeed) {
+      f.state = 'stick'; f.t = 0;
+      v.x = v.y = v.z = 0;
+      R.events.push({ type: 'crash', actor: a, x: p.x, y: p.y, z: p.z });
+      return true;
+    }
+    v[ax] = -v[ax] * B.bounce;
+  }
+  return false;
+}
+
+// 飛んでいる人を dt 進める
+function stepFly(a, dt, R) {
+  const f = a.fly, B = CFG.blast, G = CFG.gym, p = f.pos, v = f.vel;
+  f.t += dt;
+  if (f.state === 'air') {
+    v.y -= CFG.gravity * dt;
+    p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
+    f.rx += f.spinX * dt; f.rz += f.spinZ * dt;
+    if (p.y + B.r > G.ceil) {                             // 天井
+      p.y = G.ceil - B.r;
+      if (v.y > 0) { v.y = -v.y * B.bounce; R.events.push({ type: 'crash', actor: a, x: p.x, y: p.y, z: p.z }); }
+    }
+    if (!hitWallsBody(a, R, true) && !hitNetBody(a, R) && p.y - B.r <= 0) {   // 床
+      p.y = B.r;
+      R.events.push({ type: 'land', actor: a, x: p.x, z: p.z });
+      if (v.y < -B.landSpeed) { v.y = -v.y * B.floorBounce; f.spinX *= 0.6; f.spinZ *= 0.6; }
+      else { v.y = 0; f.state = 'slide'; f.t = 0; }
+    }
+  } else if (f.state === 'stick') {                       // 壁に張り付いて、少ししたらずり落ちる
+    if (f.t > B.stickTime) {
+      p.y -= B.slideDown * dt;
+      if (p.y - B.r <= 0) { p.y = B.r; f.state = 'down'; f.t = 0; }
+    }
+  } else if (f.state === 'slide') {                       // 床を滑る
+    const s = Math.hypot(v.x, v.z), ns = Math.max(0, s - B.friction * dt);
+    if (s > 0) { v.x *= ns / s; v.z *= ns / s; }
+    p.x += v.x * dt; p.z += v.z * dt;
+    hitWallsBody(a, R, false);
+    f.spinX *= Math.max(0, 1 - dt * 3); f.spinZ *= Math.max(0, 1 - dt * 3);
+    if (ns < 0.3) { f.state = 'down'; f.t = 0; }
+  } else if (f.state === 'hang') {                        // ネットにぶら下がって、落ちる
+    if (f.t > B.hangTime) { f.state = 'air'; f.t = 0; v.x = (p.x < 0 ? -1 : 1) * 0.8; v.y = 0; v.z = 0; }
+  } else if (f.state === 'down') {
+    if (f.t > B.downTime) { f.state = 'getup'; f.t = 0; }
+  } else if (f.state === 'getup') {
+    if (f.t > B.getupTime) { a.x = p.x; a.z = p.z; a.y = 0; a.vy = 0; a.fly = null; return; }
+  }
+  a.x = p.x; a.z = p.z;
+}
+
+// 飛んでいる体どうし、飛んでいる体と立っている人のぶつかり。立っている人は一緒に吹っ飛ぶ
+function collideFlyers(R) {
+  const A = R.actors, B = CFG.blast, min = B.r * 2;
+  const airborne = o => o.fly && o.fly.state === 'air';
+  for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) {
+    const a = A[i], b = A[j];
+    if (!airborne(a) && !airborne(b)) continue;
+    if ((a.fly && !airborne(a)) || (b.fly && !airborne(b))) continue;   // 寝ている・張り付いている人とはぶつからない
+    const pa = a.fly ? a.fly.pos : { x: a.x, y: B.center, z: a.z };
+    const pb = b.fly ? b.fly.pos : { x: b.x, y: B.center, z: b.z };
+    const dx = pb.x - pa.x, dy = pb.y - pa.y, dz = pb.z - pa.z, d = Math.hypot(dx, dy, dz);
+    if (d >= min || d < 1e-6) continue;
+    if (!b.fly || !a.fly) {                                // 立っている人に当たった：勢いを半分ずつ分ける
+      const flyer = a.fly ? a : b, other = a.fly ? b : a, v = flyer.fly.vel;
+      launch(R, other, { x: v.x * 0.5, y: Math.abs(v.y) * 0.5 + 3, z: v.z * 0.5 });
+      v.x *= 0.5; v.y *= 0.5; v.z *= 0.5;
+    } else {                                               // 飛んでいる体どうし：ぶつかる向きの速さを交換する
+      const va = a.fly.vel, vb = b.fly.vel, nx = dx / d, ny = dy / d, nz = dz / d;
+      const rel = (va.x - vb.x) * nx + (va.y - vb.y) * ny + (va.z - vb.z) * nz;
+      if (rel <= 0) continue;                             // 離れていく向き
+      const k = rel * 0.9;
+      va.x -= k * nx; va.y -= k * ny; va.z -= k * nz;
+      vb.x += k * nx; vb.y += k * ny; vb.z += k * nz;
+    }
+    R.events.push({ type: 'collide', a, b });
   }
 }
 // ===== 検証ハーネス =====
@@ -1119,6 +1284,100 @@ test('味方 AI：カバーのレシーブにも反応の遅れがある', () =>
     choose(R, null);
     near(R.mate.task.delay, CFG.ai.delay[0] + CFG.ai.slowDelay, 1e-9);
   });
+});
+
+// ===== 吹っ飛び =====
+function withBlast(changes, fn) {                          // CFG.blast を一時的に変えて試す
+  const old = {};
+  for (const k in changes) { old[k] = CFG.blast[k]; CFG.blast[k] = changes[k]; }
+  try { fn(); } finally { Object.assign(CFG.blast, old); }
+}
+function soloR(...actors) { return { actors, events: [], rand: zero }; }
+function flyFor(R, a, sec) { for (let i = 0; i < Math.round(sec * 60) && a.fly; i++) stepFly(a, 1 / 60, R); }
+
+test('blastActors: 爆発した側の 2 人は上へ・外へ飛び、反対側の遠い人は飛ばない', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  blastActors(R, { x: 5, z: 0, side: 1 });
+  const [me, mate, e2, e3] = R.actors;
+  eq([!!me.fly, !!mate.fly, !!e2.fly, !!e3.fly], [false, false, true, true]);
+  eq(e2.fly.vel.y > 0 && e2.fly.vel.z < 0, true, 'z=-2 の人は -z へ');
+  eq(e3.fly.vel.z > 0, true, 'z=+2 の人は +z へ');
+  eq(e2.task, null);
+});
+
+test('blastActors: 反対側でも爆心の近くなら、軽く飛ぶ', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  R.mate.x = -1; R.mate.z = 0;
+  R.actors[2].x = 2; R.actors[2].z = 0;
+  blastActors(R, { x: 1, z: 0, side: 1 });
+  const sp = a => Math.hypot(a.fly.vel.x, a.fly.vel.y, a.fly.vel.z);
+  eq(!!R.mate.fly, true);
+  eq(sp(R.mate) < sp(R.actors[2]), true);
+});
+
+test('blastActors: superChance なら上へ異常に強く飛ぶ', () => {
+  const R1 = quietRally(); startPoint(R1, 0);
+  blastActors(R1, { x: 5, z: 0, side: 1 });
+  withBlast({ superChance: 1 }, () => {
+    const R2 = quietRally(); startPoint(R2, 0);
+    blastActors(R2, { x: 5, z: 0, side: 1 });
+    near(R2.actors[2].fly.vel.y, R1.actors[2].fly.vel.y * CFG.blast.superMul, 1e-9);
+  });
+});
+
+test('stepFly: 天井に当たっても突き抜けず、下へ跳ね返る（crash）', () => {
+  const a = newActor(0, 0, -5, 0), R = soloR(a);
+  launch(R, a, { x: 0, y: 25, z: 0 });
+  let top = 0;
+  for (let i = 0; i < 50; i++) { stepFly(a, 1 / 60, R); top = Math.max(top, a.fly.pos.y); }   // 天井で跳ね返って、まだ落ちている途中まで
+  eq(top <= CFG.gym.ceil - CFG.blast.r + 1e-9, true);
+  eq(a.fly.vel.y < 0, true);
+  eq(R.events.some(e => e.type === 'crash'), true);
+});
+
+test('stepFly: 速く壁に当たると張り付き、ずり落ちて倒れ、起き上がる', () => {
+  const a = newActor(0, 0, -13, 0), R = soloR(a);
+  launch(R, a, { x: -15, y: 3, z: 0 });
+  flyFor(R, a, 0.3);
+  eq(a.fly.state, 'stick');
+  near(a.fly.pos.x, -(CFG.gym.halfX - CFG.blast.r), 1e-9);
+  flyFor(R, a, 4);
+  eq(a.fly, null, '起き上がった');
+  eq(a.y, 0);
+  near(a.x, -(CFG.gym.halfX - CFG.blast.r), 1e-9);
+});
+
+test('stepFly: 床に落ちると何メートルも滑り、倒れてから起き上がる', () => {
+  const a = newActor(0, 0, -5, 0), R = soloR(a);
+  launch(R, a, { x: -8, y: 2, z: 0 });
+  const states = new Set();
+  for (let i = 0; i < 600 && a.fly; i++) { states.add(a.fly.state); stepFly(a, 1 / 60, R); }
+  eq(['slide', 'down', 'getup'].every(s => states.has(s)), true, '滑る → 倒れる → 起き上がる');
+  eq(a.x < -9, true, '4m 以上滑った');
+  eq(a.fly, null);
+});
+
+test('stepFly: netHang ならネットに引っかかってぶら下がり、しばらくして落ちる', () => {
+  withBlast({ netHang: 1 }, () => {
+    const a = newActor(0, 0, -1, 0), R = soloR(a);
+    launch(R, a, { x: 6, y: 3, z: 0 });
+    flyFor(R, a, 0.3);
+    eq(a.fly.state, 'hang');
+    eq(R.events.some(e => e.type === 'net'), true);
+    flyFor(R, a, CFG.blast.hangTime + 4);
+    eq(a.fly, null);
+  });
+});
+
+test('collideFlyers: 飛んできた人が立っている人に当たると、その人も吹っ飛ぶ', () => {
+  const a = newActor(0, 0, -5, 0), b = newActor(1, 0, -4, 0), R = soloR(a, b);
+  launch(R, a, { x: 6, y: 0.5, z: 0 });
+  for (let i = 0; i < 20 && !b.fly; i++) { stepFly(a, 1 / 60, R); collideFlyers(R); }
+  eq(!!b.fly, true);
+  eq(b.fly.vel.x > 0, true, '同じ向きへ');
+  eq(R.events.some(e => e.type === 'collide'), true);
 });
 
 // ===== 結果表示 =====

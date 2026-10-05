@@ -9,6 +9,8 @@ cat src/00-head.html \
     src/14-shot.js \
     src/15-actors.js \
     src/16-rally.js \
+    src/20-blast.js \
+    src/22-sound.js \
     src/30-gym.js \
     src/40-player.js \
     src/41-bomb.js \
@@ -29,6 +31,7 @@ cat src/verify-head.html \
     src/14-shot.js \
     src/15-actors.js \
     src/16-rally.js \
+    src/20-blast.js \
     src/verify-tests.js \
     src/99-tail.html > verify.html
 

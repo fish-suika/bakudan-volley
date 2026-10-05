@@ -520,6 +520,100 @@ test('味方 AI：カバーのレシーブにも反応の遅れがある', () =>
   });
 });
 
+// ===== 吹っ飛び =====
+function withBlast(changes, fn) {                          // CFG.blast を一時的に変えて試す
+  const old = {};
+  for (const k in changes) { old[k] = CFG.blast[k]; CFG.blast[k] = changes[k]; }
+  try { fn(); } finally { Object.assign(CFG.blast, old); }
+}
+function soloR(...actors) { return { actors, events: [], rand: zero }; }
+function flyFor(R, a, sec) { for (let i = 0; i < Math.round(sec * 60) && a.fly; i++) stepFly(a, 1 / 60, R); }
+
+test('blastActors: 爆発した側の 2 人は上へ・外へ飛び、反対側の遠い人は飛ばない', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  blastActors(R, { x: 5, z: 0, side: 1 });
+  const [me, mate, e2, e3] = R.actors;
+  eq([!!me.fly, !!mate.fly, !!e2.fly, !!e3.fly], [false, false, true, true]);
+  eq(e2.fly.vel.y > 0 && e2.fly.vel.z < 0, true, 'z=-2 の人は -z へ');
+  eq(e3.fly.vel.z > 0, true, 'z=+2 の人は +z へ');
+  eq(e2.task, null);
+});
+
+test('blastActors: 反対側でも爆心の近くなら、軽く飛ぶ', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  R.mate.x = -1; R.mate.z = 0;
+  R.actors[2].x = 2; R.actors[2].z = 0;
+  blastActors(R, { x: 1, z: 0, side: 1 });
+  const sp = a => Math.hypot(a.fly.vel.x, a.fly.vel.y, a.fly.vel.z);
+  eq(!!R.mate.fly, true);
+  eq(sp(R.mate) < sp(R.actors[2]), true);
+});
+
+test('blastActors: superChance なら上へ異常に強く飛ぶ', () => {
+  const R1 = quietRally(); startPoint(R1, 0);
+  blastActors(R1, { x: 5, z: 0, side: 1 });
+  withBlast({ superChance: 1 }, () => {
+    const R2 = quietRally(); startPoint(R2, 0);
+    blastActors(R2, { x: 5, z: 0, side: 1 });
+    near(R2.actors[2].fly.vel.y, R1.actors[2].fly.vel.y * CFG.blast.superMul, 1e-9);
+  });
+});
+
+test('stepFly: 天井に当たっても突き抜けず、下へ跳ね返る（crash）', () => {
+  const a = newActor(0, 0, -5, 0), R = soloR(a);
+  launch(R, a, { x: 0, y: 25, z: 0 });
+  let top = 0;
+  for (let i = 0; i < 50; i++) { stepFly(a, 1 / 60, R); top = Math.max(top, a.fly.pos.y); }   // 天井で跳ね返って、まだ落ちている途中まで
+  eq(top <= CFG.gym.ceil - CFG.blast.r + 1e-9, true);
+  eq(a.fly.vel.y < 0, true);
+  eq(R.events.some(e => e.type === 'crash'), true);
+});
+
+test('stepFly: 速く壁に当たると張り付き、ずり落ちて倒れ、起き上がる', () => {
+  const a = newActor(0, 0, -13, 0), R = soloR(a);
+  launch(R, a, { x: -15, y: 3, z: 0 });
+  flyFor(R, a, 0.3);
+  eq(a.fly.state, 'stick');
+  near(a.fly.pos.x, -(CFG.gym.halfX - CFG.blast.r), 1e-9);
+  flyFor(R, a, 4);
+  eq(a.fly, null, '起き上がった');
+  eq(a.y, 0);
+  near(a.x, -(CFG.gym.halfX - CFG.blast.r), 1e-9);
+});
+
+test('stepFly: 床に落ちると何メートルも滑り、倒れてから起き上がる', () => {
+  const a = newActor(0, 0, -5, 0), R = soloR(a);
+  launch(R, a, { x: -8, y: 2, z: 0 });
+  const states = new Set();
+  for (let i = 0; i < 600 && a.fly; i++) { states.add(a.fly.state); stepFly(a, 1 / 60, R); }
+  eq(['slide', 'down', 'getup'].every(s => states.has(s)), true, '滑る → 倒れる → 起き上がる');
+  eq(a.x < -9, true, '4m 以上滑った');
+  eq(a.fly, null);
+});
+
+test('stepFly: netHang ならネットに引っかかってぶら下がり、しばらくして落ちる', () => {
+  withBlast({ netHang: 1 }, () => {
+    const a = newActor(0, 0, -1, 0), R = soloR(a);
+    launch(R, a, { x: 6, y: 3, z: 0 });
+    flyFor(R, a, 0.3);
+    eq(a.fly.state, 'hang');
+    eq(R.events.some(e => e.type === 'net'), true);
+    flyFor(R, a, CFG.blast.hangTime + 4);
+    eq(a.fly, null);
+  });
+});
+
+test('collideFlyers: 飛んできた人が立っている人に当たると、その人も吹っ飛ぶ', () => {
+  const a = newActor(0, 0, -5, 0), b = newActor(1, 0, -4, 0), R = soloR(a, b);
+  launch(R, a, { x: 6, y: 0.5, z: 0 });
+  for (let i = 0; i < 20 && !b.fly; i++) { stepFly(a, 1 / 60, R); collideFlyers(R); }
+  eq(!!b.fly, true);
+  eq(b.fly.vel.x > 0, true, '同じ向きへ');
+  eq(R.events.some(e => e.type === 'collide'), true);
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');
