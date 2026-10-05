@@ -78,9 +78,28 @@ const POSES = {
     hipL: [0.2, 0, 0.1], kneeL: [0.5, 0, 0],
     hipR: [-0.6, 0, -0.1], kneeR: [0.9, 0, 0],
   },
+  flail1: {                                               // 空中でばたつく
+    spine: [-0.3, 0, 0], neck: [0.4, 0, 0],
+    shoulderL: [-2.6, 0, 1.2], elbowL: [-0.5, 0, 0],
+    shoulderR: [-1.8, 0, -1.4], elbowR: [-1.0, 0, 0],
+    hipL: [-0.9, 0, 0.4], kneeL: [1.2, 0, 0],
+    hipR: [0.3, 0, -0.5], kneeR: [0.4, 0, 0],
+  },
+  splat: {                                                // 壁に張り付く：大の字
+    shoulderL: [0, 0, 2.2], shoulderR: [0, 0, -2.2],
+    hipL: [0, 0, 0.6], hipR: [0, 0, -0.6],
+  },
+  lie: {                                                  // 倒れている：手足を投げ出す
+    neck: [-0.2, 0, 0],
+    shoulderL: [-0.2, 0, 1.1], elbowL: [-0.3, 0, 0],
+    shoulderR: [-0.2, 0, -1.1], elbowR: [-0.3, 0, 0],
+    hipL: [0, 0, 0.15], kneeL: [0.2, 0, 0],
+    hipR: [0, 0, -0.15], kneeR: [0.2, 0, 0],
+  },
 };
 
 POSES.run2 = mirrorPose(POSES.run1);                      // 走る（右脚が前）
+POSES.flail2 = mirrorPose(POSES.flail1);
 
 // 左右を入れ替えたポーズ（L ↔ R。ry と rz は向きが逆になる）
 function mirrorPose(p) {
@@ -113,4 +132,12 @@ function poseFor(a, simT) {
   if (t && t.kind === 'whiff') return simT - t.start < 0.35 ? POSES.spikeBack : POSES.spikeHit;
   if (t && WAIT_POSE[t.kind]) return POSES[WAIT_POSE[t.kind]];
   return POSES.ready;
+}
+
+// 吹っ飛んでいる人のポーズ（20-blast.js の fly.state から）
+function flyPose(f, simT) {
+  if (f.state === 'air' || f.state === 'hang') return Math.sin(simT * 18) > 0 ? POSES.flail1 : POSES.flail2;
+  if (f.state === 'stick') return POSES.splat;
+  if (f.state === 'getup') return f.t < CFG.blast.getupTime * 0.5 ? POSES.lie : POSES.ready;
+  return POSES.lie;
 }

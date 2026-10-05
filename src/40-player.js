@@ -14,7 +14,13 @@ function makePlayer(scene, team) {
 
   const root = new THREE.Group();
   scene.add(root);
-  const hips = grp('hips', root, 0, CFG.player.hipY, 0);
+  const tumble = new THREE.Group();                       // 吹っ飛びで体の中心のまわりに回すための入れ物
+  tumble.position.y = CFG.blast.center;
+  root.add(tumble);
+  const inner = new THREE.Group();
+  inner.position.y = -CFG.blast.center;
+  tumble.add(inner);
+  const hips = grp('hips', inner, 0, CFG.player.hipY, 0);
   part(hips, new THREE.BoxGeometry(0.34, 0.2, 0.22), shorts, 0, 0, 0);
   const spine = grp('spine', hips, 0, 0.08, 0);
   part(spine, new THREE.BoxGeometry(0.38, 0.56, 0.24), shirt, 0, 0.3, 0);
@@ -39,7 +45,7 @@ function makePlayer(scene, team) {
     part(kn, limb(0.42, 0.06, 0.045), skin, 0, -0.21, 0);
     part(kn, new THREE.BoxGeometry(0.11, 0.08, 0.24), shoe, 0, -0.41, 0.04);
   }
-  return { root, j, team, phase: Math.random() * 6, look: { yaw: 0, pitch: 0 } };
+  return { root, tumble, j, team, phase: Math.random() * 6, look: { yaw: 0, pitch: 0 }, tx: 0, tz: 0 };
 }
 
 // 足元を (x, z) に置き、ネットのほうを向かせる
@@ -72,9 +78,11 @@ function lookAtTarget(pl, target, dt) {
   pl.j.spine.rotation.y += pl.look.yaw * 0.3;
 }
 
-// 選手の見た目を actor（15-actors.js）に合わせる。ポーズは目標へなめらかに寄せ、focus（爆弾）を目で追う
+// 選手の見た目を actor（15-actors.js）に合わせる。ポーズは目標へなめらかに寄せ、focus（爆弾）を目で追う。
+// 吹っ飛んでいる間（actor.fly）は、体の中心で回し、倒れて、起き上がる
 function updatePlayer(pl, a, dt, simT, focus) {
-  const target = poseFor(a, simT);
+  const f = a.fly;
+  const target = f ? flyPose(f, simT) : poseFor(a, simT);
   if (!pl.cur) pl.cur = { hipsDrop: 0 };
   const k = Math.min(1, dt * 14);
   for (const name of JOINTS) {
@@ -84,7 +92,39 @@ function updatePlayer(pl, a, dt, simT, focus) {
   }
   pl.cur.hipsDrop += ((target.hipsDrop || 0) - pl.cur.hipsDrop) * k;
   applyPose(pl, pl.cur);
+  if (f) { placeFlying(pl, f, dt); return; }
+  pl.tumble.rotation.set(0, 0, 0);
+  pl.root.rotation.y = pl.team === 0 ? Math.PI / 2 : -Math.PI / 2;   // 吹っ飛びで回った向きを戻す
+  pl.tx = pl.tz = 0;
   pl.root.position.set(a.x, a.y, a.z);
   if (!a.moving && a.y === 0 && !a.task) pl.j.hips.position.y += Math.sin(simT * 3 + pl.phase) * 0.012;   // 構えたまま小さく揺れる
   lookAtTarget(pl, focus, dt);
+}
+
+// 吹っ飛んでいる人の置き方。空中・ぶら下がり・張り付きは物理の回転のまま。
+// 滑る・倒れているときは、あお向けかうつ伏せの近いほうへ倒し、起き上がるときは立てる
+function placeFlying(pl, f, dt) {
+  const B = CFG.blast, T = pl.tumble, G = CFG.gym;
+  let yaw = pl.team === 0 ? Math.PI / 2 : -Math.PI / 2;   // 普段の向き（ネットのほう）
+  if (f.state === 'stick') {                              // 壁に張り付くときは、壁のほうを向いて大の字になる
+    const onX = Math.abs(f.pos.x) + B.r >= G.halfX - 0.01;
+    yaw = onX ? Math.atan2(Math.sign(f.pos.x), 0) : Math.atan2(0, Math.sign(f.pos.z));
+  }
+  const dy = Math.atan2(Math.sin(yaw - pl.root.rotation.y), Math.cos(yaw - pl.root.rotation.y));
+  pl.root.rotation.y += dy * Math.min(1, dt * 10);
+  if (f.state === 'air' || f.state === 'hang' || f.state === 'stick') {
+    T.rotation.set(f.rx, 0, f.rz);
+    pl.tx = Math.atan2(Math.sin(f.rx), Math.cos(f.rx));
+    pl.tz = Math.atan2(Math.sin(f.rz), Math.cos(f.rz));
+    pl.root.position.set(f.pos.x, f.pos.y - B.center, f.pos.z);
+    return;
+  }
+  const up = f.state === 'getup' ? Math.min(1, f.t / B.getupTime) : 0;
+  const goal = f.state === 'getup' ? 0 : (pl.tx >= 0 ? Math.PI / 2 : -Math.PI / 2);
+  const k = Math.min(1, dt * 8);
+  pl.tx += (goal - pl.tx) * k;
+  pl.tz += (0 - pl.tz) * k;
+  T.rotation.set(pl.tx, 0, pl.tz);
+  const cy = 0.28 + (B.center - 0.28) * up;              // 寝ているとき体の中心は床から 0.28m
+  pl.root.position.set(f.pos.x, cy - B.center, f.pos.z);
 }
