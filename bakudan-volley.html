@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>爆弾バレー</title>
+<style>
+  :root{--ink:#fff;--jp:"Hiragino Kaku Gothic ProN","Yu Gothic","YuGothic","Meiryo","Noto Sans JP",sans-serif}
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#20242a;color:var(--ink);font-family:var(--jp);
+    touch-action:none;user-select:none;-webkit-user-select:none}
+  canvas{display:block;width:100%;height:100%}
+
+  /* ---- 試し用の案内（Phase 1） ---- */
+  #hint{position:fixed;left:16px;bottom:16px;z-index:5;font-size:13px;opacity:.8;pointer-events:none;text-shadow:0 1px 6px #000}
+
+  /* ---- お知らせ ---- */
+  #toast{position:fixed;left:50%;top:22%;z-index:7;transform:translate(-50%,-50%);width:max-content;max-width:90vw;
+    font-size:clamp(22px,5vw,40px);font-weight:700;letter-spacing:.08em;text-align:center;
+    text-shadow:0 2px 16px rgba(0,0,0,.8);opacity:0;transition:opacity .25s;pointer-events:none}
+  #toast.on{opacity:1}
+
+  /* ---- スマホが縦向きのときの案内 ---- */
+  #rotate{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:16px;
+    text-align:center;font-size:20px;background:#20242a}
+  @media (orientation: portrait) and (pointer: coarse){#rotate{display:flex}}
+</style>
+</head>
+<body>
+<div id="hint">床をクリック（タップ）すると、反対側から爆弾が飛んでくる（試し用）／ Space でランダムな場所へ</div>
+<div id="toast"></div>
+<div id="rotate">横画面にしてください</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+// ===== 数値（遊びながら調整する） =====
+const CFG = {
+  gravity: 9.8,
+  court: { halfLen: 9, halfWid: 4.5 },                    // コートは x:-9..9, z:-4.5..4.5。ネットは x=0
+  net: { top: 2.43, bottom: 1.43, halfWid: 5.5, thick: 0.06 },
+  gym: { halfX: 15, halfZ: 11, ceil: 12 },                // 壁は x=±15, z=±11、天井は 12m
+  ball: { r: 0.3, bounce: 0.65, netBounce: 0.25, playerBounce: 0.5, maxStep: 1 / 240 },
+  player: { r: 0.4, h: 1.9, hipY: 0.95 },                 // 当たり判定は足元から高さ h の円柱
+  startSpots: [                                           // 構える位置（team 0 = 味方・左、1 = 敵・右）
+    { team: 0, x: -5, z: -2 }, { team: 0, x: -5, z: 2 },
+    { team: 1, x: 5, z: -2 },  { team: 1, x: 5, z: 2 },
+  ],
+  explodeDelay: 0.25,                                     // 床に触れてから爆発するまでの「一瞬の間」（秒）
+  camera: { y: 8.5, z: 17, lookY: 1.0, fov: 42, follow: 0.25 },
+  test: { apex: 7, fromX: 7, fromY: 2.6 },                // 試し投げ：反対側 x=±7、高さ 2.6m から、最高点 7m
+};
+// ===== 爆弾の物理（three.js 非依存） =====
+// 爆弾は床に触れたときだけ爆発する。天井・壁・ネット・選手には跳ね返るだけ。
+function newBall(x, y, z) {
+  return { pos: { x, y, z }, vel: { x: 0, y: 0, z: 0 }, live: true };
+}
+function sideOf(x) { return x < 0 ? 0 : 1; }             // 0 = 味方（左）、1 = 敵（右）
+function inCourt(x, z) { return Math.abs(x) <= CFG.court.halfLen && Math.abs(z) <= CFG.court.halfWid; }
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+// dt 秒進める。床に触れたら { x, z, side } を返して live=false にする。それ以外は null。
+// players: [{ x, z }] 選手の足元。rand: 0..1 の乱数（テストで固定するため）
+function stepBall(b, dt, players, rand) {
+  if (!b.live) return null;
+  rand = rand || Math.random;
+  const n = Math.max(1, Math.ceil(dt / CFG.ball.maxStep - 1e-9));   // すり抜けないよう細かく刻む
+  const h = dt / n, g = CFG.gravity;
+  for (let i = 0; i < n; i++) {
+    b.pos.x += b.vel.x * h;
+    b.pos.y += (b.vel.y - 0.5 * g * h) * h;              // 重力一定なので、この刻みでも放物線は正確
+    b.pos.z += b.vel.z * h;
+    b.vel.y -= g * h;
+    const hit = collideBall(b, players || [], rand);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function collideBall(b, players, rand) {
+  const r = CFG.ball.r, G = CFG.gym, e = CFG.ball.bounce, p = b.pos, v = b.vel;
+  // 床：ここだけ爆発する
+  if (p.y - r <= 0) {
+    p.y = r;
+    b.live = false;
+    return { x: p.x, z: p.z, side: sideOf(p.x) };
+  }
+  // 天井・壁（手前の壁は見えないが当たる）
+  if (p.y + r > G.ceil)   { p.y = G.ceil - r;   if (v.y > 0) v.y = -v.y * e; }
+  if (p.x - r < -G.halfX) { p.x = -G.halfX + r; if (v.x < 0) v.x = -v.x * e; }
+  if (p.x + r >  G.halfX) { p.x =  G.halfX - r; if (v.x > 0) v.x = -v.x * e; }
+  if (p.z - r < -G.halfZ) { p.z = -G.halfZ + r; if (v.z < 0) v.z = -v.z * e; }
+  if (p.z + r >  G.halfZ) { p.z =  G.halfZ - r; if (v.z > 0) v.z = -v.z * e; }
+  // ネット（白帯から下 1m の薄い板）
+  const N = CFG.net;
+  sphereBox(b, { minX: -N.thick / 2, maxX: N.thick / 2, minY: N.bottom, maxY: N.top, minZ: -N.halfWid, maxZ: N.halfWid }, CFG.ball.netBounce);
+  for (const pl of players) hitPlayer(b, pl, rand);
+  return null;
+}
+
+// 球と箱。重なっていれば外へ押し出し、面の向きの速さを反転して e 倍にする
+function sphereBox(b, box, e) {
+  const p = b.pos, v = b.vel, r = CFG.ball.r;
+  let dx = p.x - clamp(p.x, box.minX, box.maxX);
+  let dy = p.y - clamp(p.y, box.minY, box.maxY);
+  let dz = p.z - clamp(p.z, box.minZ, box.maxZ);
+  const d2 = dx * dx + dy * dy + dz * dz;
+  if (d2 >= r * r) return false;
+  let d = Math.sqrt(d2);
+  if (d < 1e-6) {                                         // 中心が箱の中：x の向きに押し出す（ネットは薄いので）
+    const left = p.x < (box.minX + box.maxX) / 2;
+    p.x = left ? box.minX - r : box.maxX + r;
+    dx = left ? -1 : 1; dy = 0; dz = 0; d = 1;
+  } else {
+    const k = (r - d) / d;
+    p.x += dx * k; p.y += dy * k; p.z += dz * k;
+  }
+  const nx = dx / d, ny = dy / d, nz = dz / d;
+  const vn = v.x * nx + v.y * ny + v.z * nz;
+  if (vn < 0) { const j = (1 + e) * vn; v.x -= j * nx; v.y -= j * ny; v.z -= j * nz; }
+  return true;
+}
+
+// 選手は足元から高さ h の円柱。横から当たれば横へ、頭の上なら上へ弾く
+function hitPlayer(b, pl, rand) {
+  const R = CFG.player.r, H = CFG.player.h, r = CFG.ball.r, e = CFG.ball.playerBounce, p = b.pos, v = b.vel;
+  const dx = p.x - pl.x, dz = p.z - pl.z, d = Math.hypot(dx, dz);
+  if (p.y - r >= H || d >= R + r) return false;
+  if (p.y > H && d < R) {                                 // 頭の上：上へ弾く。真上で止まらないよう横にも押す
+    p.y = H + r;
+    if (v.y < 0) v.y = -v.y * e;
+    const a = rand() * Math.PI * 2;
+    v.x += Math.cos(a) * 1.2; v.z += Math.sin(a) * 1.2;
+    return true;
+  }
+  const nx = d < 1e-6 ? 1 : dx / d, nz = d < 1e-6 ? 0 : dz / d;
+  p.x = pl.x + nx * (R + r); p.z = pl.z + nz * (R + r);
+  const vn = v.x * nx + v.z * nz;
+  if (vn < 0) { const j = (1 + e) * vn; v.x -= j * nx; v.z -= j * nz; }
+  return true;
+}
+// ===== 打ち出しの計算（three.js 非依存） =====
+// from から打ち出し、床からの高さ apex の最高点を通って、to（x, z）の地点で床に触れる初速を返す。
+// 「床に触れる」は爆弾の中心が半径 r の高さになったとき。apex が打つ高さより低いときは打つ高さを最高点とする
+function shotVelocity(from, to, apex) {
+  const g = CFG.gravity, r = CFG.ball.r;
+  const top = Math.max(apex, from.y + 0.01, r + 0.01);
+  const vy = Math.sqrt(2 * g * (top - from.y));
+  const t = vy / g + Math.sqrt(2 * (top - r) / g);          // 上がる時間＋最高点から床までの時間
+  return { x: (to.x - from.x) / t, y: vy, z: (to.z - from.z) / t };
+}
+// ===== 体育館・コート・ネット・光 =====
+function buildGym(scene) {
+  const C = CFG.court, N = CFG.net, G = CFG.gym;
+  const mat = c => new THREE.MeshLambertMaterial({ color: c });
+  function box(w, h, d, color, x, y, z, cast) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+    m.position.set(x, y, z);
+    m.receiveShadow = true;
+    if (cast) m.castShadow = true;
+    scene.add(m);
+    return m;
+  }
+  scene.background = new THREE.Color(0x20242a);
+
+  // 床（木）とコート面
+  box(G.halfX * 2, 0.1, G.halfZ * 2, 0xc89a62, 0, -0.05, 0);
+  box(C.halfLen * 2, 0.01, C.halfWid * 2, 0xd77a3c, 0, 0.005, 0);
+  // 線（幅 5cm）：外周、エンドライン、アタックライン（ネットから 3m）、センターライン
+  const L = 0.05, ly = 0.012, white = 0xffffff;
+  box(C.halfLen * 2 + L, 0.004, L, white, 0, ly,  C.halfWid);
+  box(C.halfLen * 2 + L, 0.004, L, white, 0, ly, -C.halfWid);
+  for (const x of [-C.halfLen, -3, 0, 3, C.halfLen]) box(L, 0.004, C.halfWid * 2, white, x, ly, 0);
+
+  // 壁と天井（手前の壁はカメラの前なので作らない。当たり判定だけある）
+  box(G.halfX * 2, G.ceil, 0.2, 0x9fb0a8, 0, G.ceil / 2, -G.halfZ - 0.1);
+  box(0.2, G.ceil, G.halfZ * 2, 0xa9b6ad, -G.halfX - 0.1, G.ceil / 2, 0);
+  box(0.2, G.ceil, G.halfZ * 2, 0xa9b6ad,  G.halfX + 0.1, G.ceil / 2, 0);
+  box(G.halfX * 2, 0.2, G.halfZ * 2, 0x5b6168, 0, G.ceil + 0.1, 0);
+  box(G.halfX * 2, 1.2, 0.05, 0x3f6f8f, 0, 0.6, -G.halfZ + 0.03);   // 奥の壁の腰板
+
+  // 天井の照明
+  const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff6dd });
+  for (const x of [-9, -3, 3, 9]) for (const z of [-5, 1, 7]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.6), lampMat);
+    m.position.set(x, G.ceil - 0.05, z);
+    scene.add(m);
+  }
+
+  // ネット：支柱・網・上の白帯
+  for (const s of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, N.top + 0.1, 12), mat(0xdddddd));
+    post.position.set(0, (N.top + 0.1) / 2, s * (N.halfWid + 0.1));
+    post.castShadow = true;
+    scene.add(post);
+  }
+  const netMat = new THREE.MeshLambertMaterial({ color: 0x111111, transparent: true, opacity: 0.55, side: THREE.DoubleSide });
+  const net = new THREE.Mesh(new THREE.PlaneGeometry(N.halfWid * 2, N.top - N.bottom), netMat);
+  net.rotation.y = Math.PI / 2;
+  net.position.set(0, (N.top + N.bottom) / 2, 0);
+  scene.add(net);
+  box(0.04, 0.07, N.halfWid * 2, white, 0, N.top - 0.035, 0, true);
+
+  // 光
+  scene.add(new THREE.HemisphereLight(0xfff8ee, 0x8a6a48, 0.75));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.55);
+  sun.position.set(-4, 14, 6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 12, bottom: -12, near: 1, far: 40 });
+  scene.add(sun);
+}
+// ===== 選手の人型 =====
+// ===== 爆弾の見た目 =====
+// ===== ポーズ =====
+// ===== 爆発（Phase 1 は火の玉と爆風の輪。本格的な演出は Phase 4） =====
+const FX = { scene: null, light: null, list: [], shake: 0 };
+const FX_LIFE = 0.9;                                      // 秒
+
+function initFx(scene) {
+  FX.scene = scene;
+  FX.light = new THREE.PointLight(0xffb040, 0, 30);       // 最初から置いておく（途中で光を足すと描画が一瞬止まるため）
+  scene.add(FX.light);
+}
+
+function spawnExplosion(x, z) {
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffa020, transparent: true }));
+  ball.position.set(x, 0.5, z);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 40),
+    new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, 0.03, z);
+  FX.scene.add(ball, ring);
+  FX.light.position.set(x, 2, z);
+  FX.list.push({ t: 0, ball, ring });
+  FX.shake = 0.6;
+}
+
+function updateFx(dt) {
+  let glow = 0;
+  for (const f of FX.list) {
+    f.t += dt;
+    const a = Math.min(1, f.t / FX_LIFE);
+    f.ball.scale.setScalar(0.5 + 4 * Math.sqrt(a));
+    f.ball.material.opacity = 1 - a;
+    f.ball.material.color.setHSL(0.09 - 0.07 * a, 1, 0.6 - 0.3 * a);
+    f.ring.scale.setScalar(1 + 12 * a);
+    f.ring.material.opacity = 0.8 * (1 - a);
+    glow = Math.max(glow, 6 * (1 - a));
+  }
+  for (let i = FX.list.length - 1; i >= 0; i--) {
+    const f = FX.list[i];
+    if (f.t < FX_LIFE) continue;
+    FX.scene.remove(f.ball, f.ring);
+    for (const m of [f.ball, f.ring]) { m.geometry.dispose(); m.material.dispose(); }
+    FX.list.splice(i, 1);
+  }
+  FX.light.intensity = glow;
+  FX.shake = Math.max(0, FX.shake - dt * 1.2);
+}
+// ===== カメラ（中継の角度：コートの横、斜め上から） =====
+const CAM = { cam: null, x: 0 };
+
+// focusX：爆弾の x。少しだけ追って横に振る
+function updateCamera(dt, focusX) {
+  const c = CFG.camera, s = FX.shake;
+  CAM.x += (focusX * c.follow - CAM.x) * Math.min(1, dt * 2);
+  CAM.cam.position.set(CAM.x + (Math.random() - 0.5) * s, c.y + (Math.random() - 0.5) * s, c.z);
+  CAM.cam.lookAt(CAM.x, c.lookY, 0);
+}
+// ===== 入力 =====
+// ===== 画面の文字 =====
+let __toastTimer = 0;
+function showToast(text, sec) {
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.classList.add('on');
+  clearTimeout(__toastTimer);
+  __toastTimer = setTimeout(() => el.classList.remove('on'), (sec || 1.6) * 1000);
+}
+// ===== 起動とメインループ =====
+(function boot() {
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.prepend(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  buildGym(scene);
+  initFx(scene);
+  const camera = new THREE.PerspectiveCamera(CFG.camera.fov, innerWidth / innerHeight, 0.1, 200);
+  CAM.cam = camera;
+
+  addEventListener('resize', () => {
+    renderer.setSize(innerWidth, innerHeight);
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  const clock = new THREE.Clock();
+  function frame() {
+    requestAnimationFrame(frame);
+    const dt = Math.min(clock.getDelta(), 1 / 30);
+    updateFx(dt);
+    updateCamera(dt, 0);
+    renderer.render(scene, camera);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>
