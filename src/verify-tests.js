@@ -436,6 +436,86 @@ test('敵のサーブは 2 人が交代で打つ', () => {
 });
 
 
+// ===== AI =====
+test('敵 AI：こちらのサーブを近いほうがレシーブし、相方がトスし、アタックが来る（②アタック）', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  R.events.length = 0;                                     // サーブの選択の出来事を捨てる（runUntilChoose がすぐ止まらないように）
+  choose(R, 'serve');
+  const ev = runUntilChoose(R, 8);
+  eq(hitBy(ev, R.actors[2], 'receive'), true, '近いほう（z=-2）がレシーブ');
+  eq(hitBy(ev, R.actors[3], 'toss'), true, '相方がトス');
+  eq(R.choose && [R.choose.scene, R.choose.attack], ['incoming', true]);
+});
+
+test('敵 AI：rand が 0 ならミスは起きない（反応の遅れは最短、2 人目は向かわない）', () => {
+  const R = newRally(zero);
+  startPoint(R, 0);
+  choose(R, 'serve');
+  runFor(R, 2.3);                                          // サーブを打った直後
+  const t2 = R.actors[2].task, t3 = R.actors[3].task;
+  eq(t2 && t2.kind, 'receive');
+  near(t2.delay, CFG.ai.delay[0], 1e-9);
+  eq(t3, null);
+});
+
+test('敵 AI：bothGo なら 2 人とも同じ球へ向かう', () => {
+  withAI({ bothGo: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 0);
+    choose(R, 'serve');
+    runFor(R, 2.3);
+    eq([R.actors[2].task && R.actors[2].task.kind, R.actors[3].task && R.actors[3].task.kind], ['receive', 'receive']);
+  });
+});
+
+test('敵 AI：earlyJump ならアタックのジャンプが早すぎて空振りになる', () => {
+  withAI({ earlyJump: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 0);
+    R.events.length = 0;
+    choose(R, 'serve');
+    runUntilChoose(R, 8);
+    const t = R.actors[2].task;
+    eq(t && [t.kind, t.whiff], ['attack', true]);
+  });
+});
+
+test('敵 AI：blockTry なら、こちらのアタックにアタッカーへ近いほうがブロックに跳ぶ', () => {
+  withAI({ blockTry: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 1);
+    runUntilChoose(R, 4);
+    choose(R, 'receive');
+    runUntilChoose(R, 6);
+    choose(R, 'attack');
+    const blk = R.actors.find(a => a.team === 1 && a.task && a.task.kind === 'block');
+    eq(!!blk, true);
+    const other = R.actors.find(a => a.team === 1 && a !== blk);
+    eq(Math.abs(blk.z - R.me.task.at.z) <= Math.abs(other.z - R.me.task.at.z), true, '近いほう');
+  });
+});
+
+test('味方 AI：bothGo なら、自分がレシーブを選んでも味方も向かってしまう', () => {
+  withAI({ bothGo: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 1);
+    runUntilChoose(R, 4);
+    choose(R, 'receive');
+    eq([R.me.task.kind, R.mate.task && R.mate.task.kind], ['receive', 'receive']);
+  });
+});
+
+test('味方 AI：カバーのレシーブにも反応の遅れがある', () => {
+  withAI({ slowChance: 1 }, () => {
+    const R = newRally(zero);
+    startPoint(R, 1);
+    runUntilChoose(R, 4);
+    choose(R, null);
+    near(R.mate.task.delay, CFG.ai.delay[0] + CFG.ai.slowDelay, 1e-9);
+  });
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');

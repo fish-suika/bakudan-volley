@@ -16,6 +16,41 @@ function newRally(rand) {
 function partnerOf(R, a) { return R.actors.find(o => o.team === a.team && o !== a); }
 function roll(R, p) { return R.rand() < p; }
 
+function mishap(R, p) { return R.rand() >= 1 - p; }       // AI のミス（rand が 0 なら起きない）
+function speedOf(b) { return Math.hypot(b.vel.x, b.vel.y, b.vel.z); }
+// AI の反応の遅れ（秒）
+function reaction(R) {
+  const D = CFG.ai.delay;
+  return D[0] + R.rand() * (D[1] - D[0]) + (mishap(R, CFG.ai.slowChance) ? CFG.ai.slowDelay : 0);
+}
+// AI のレシーブ（強い球なら成功率が下がる。反応の遅れあり）
+function aiReceive(R, a, kind, hard) {
+  const t = giveTask(R, a, kind || 'receive', roll(R, hard ? CFG.ai.dig : CFG.ai.receive), { h: CFG.contactH.receive });
+  t.delay = reaction(R);
+  return t;
+}
+
+// こちらの球が敵の側へ来た：落下地点に近いほうがレシーブ。bothGo なら 2 人とも向かう
+function enemyDefend(R) {
+  if (R.idle[1]) return;
+  const land = predictDescent(R.ball, CFG.contactH.receive);
+  const free = R.actors.filter(a => a.team === 1 && !(a.task && a.task.kind === 'block'));
+  if (!land || !free.length) return;
+  const dist = a => Math.hypot(a.x - land.x, a.z - land.z);
+  free.sort((a, b) => dist(a) - dist(b));
+  const hard = speedOf(R.ball) > CFG.hardSpeed;
+  aiReceive(R, free[0], 'receive', hard);
+  if (free[1] && mishap(R, CFG.ai.bothGo)) aiReceive(R, free[1], 'receive', hard);
+}
+
+// こちらのアタッカーがアタックに入った：blockTry の確率で、アタッカーに近い敵がブロックに跳ぶ
+function enemyMaybeBlock(R, attacker) {
+  if (R.idle[1] || !mishap(R, CFG.ai.blockTry)) return;
+  const z = attacker.task.at.z;
+  const opp = R.actors.filter(a => a.team === 1).sort((a, b) => Math.abs(a.z - z) - Math.abs(b.z - z));
+  giveBlock(R, opp[0], roll(R, CFG.ai.block));
+}
+
 // サーブする人と、その立ち位置
 function serverOf(R, team) { return team === 0 ? R.me : R.actors[2 + R.enemyServer]; }
 function serveSpotOf(a) { return { x: -dirOf(a.team) * CFG.serveSpot, z: a.base.z * 0.5 }; }
@@ -117,7 +152,13 @@ function giveReturn(R, a, ok) { return giveTask(R, a, 'return', ok, { h: CFG.con
 function giveToss(R, a, target) { return giveTask(R, a, 'toss', roll(R, CFG.ai.toss), { h: CFG.contactH.toss, target }); }
 function giveAttack(R, a, ok, kind) {
   const whiff = !ok && R.rand() < 0.5;                    // 失敗の半分は空振り、残りはネットにかける
-  return giveTask(R, a, kind || 'attack', ok, { h: kind === 'direct' ? CFG.contactH.direct : CFG.contactH.attack, jump: true, whiff });
+  const t = giveTask(R, a, kind || 'attack', ok, { h: kind === 'direct' ? CFG.contactH.direct : CFG.contactH.attack, jump: true, whiff });
+  if (a !== R.me && t.jumpAt != null && mishap(R, CFG.ai.earlyJump)) {   // AI：ジャンプが早すぎて空振り
+    t.jumpAt -= 0.35;
+    t.whiff = true;
+  }
+  if (a.team === 0) enemyMaybeBlock(R, a);
+  return t;
 }
 // ブロック：相手のアタッカーの正面のネット際へ行き、打つ瞬間に合わせて跳ぶ
 function giveBlock(R, a, ok) {
@@ -155,14 +196,16 @@ function choose(R, action) {
   }
   if (sc === 'incoming') {
     R.awaiting = true;
-    if (action === 'receive') giveReceive(R, me, roll(R, P.incoming.receive));
-    else if (action === 'attack') {
-      const hard = attack || Math.hypot(b.vel.x, b.vel.y, b.vel.z) > CFG.hardSpeed;
+    const hard = attack || speedOf(b) > CFG.hardSpeed;
+    if (action === 'receive') {
+      giveReceive(R, me, roll(R, P.incoming.receive));
+      if (mishap(R, CFG.ai.bothGo)) aiReceive(R, mate, 'receive', hard);   // 味方も向かってしまう
+    } else if (action === 'attack') {
       giveAttack(R, me, roll(R, hard ? P.incoming.directHard : P.incoming.directSoft), 'direct');
     } else {
       if (action === 'block') giveBlock(R, me, attack && roll(R, P.incoming.block));
       else if (action === 'serve') giveNoop(R, me, 'whiff');
-      giveReceive(R, mate, roll(R, CFG.ai.receive));      // 空いた所は味方がカバー（時間切れも同じ）
+      aiReceive(R, mate, 'receive', hard);                // 空いた所は味方がカバー（時間切れも同じ）
     }
     return;
   }
@@ -171,7 +214,7 @@ function choose(R, action) {
   else if (action === 'receive') giveReturn(R, me, roll(R, P.tossed.receive));
   else if (action === 'block') giveNoop(R, me, 'blockNoop');
   else if (action === 'serve') giveNoop(R, me, 'whiff');
-  else giveReturn(R, mate, roll(R, CFG.ai.receive));      // 時間切れ：味方が返す
+  else aiReceive(R, mate, 'return', false);              // 時間切れ：味方が返す
 }
 
 // 相手がブロックに跳んでいれば、そのブロックの成否に合わせてコースを決める：
@@ -220,8 +263,9 @@ function afterHit(R, a, t) {
     else giveAttack(R, partner, roll(R, CFG.ai.attack));
     if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', true);   // 敵のトス＝アタックが来る
   }
-  if (!headingTo(R, a.team)) {
+  if (!headingTo(R, a.team)) {                            // 相手側へ飛んだ
     retarget(R, 1 - a.team);
+    if (a.team === 0) enemyDefend(R);
     if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false, t.kind === 'serve');
   }
 }
@@ -230,6 +274,8 @@ function resolveContact(R, a, c) {
   const t = a.task;
   a.task = null;
   a.home = { ...a.base };                                 // サーブを打ったら定位置へ戻る
+  const p = partnerOf(R, a);
+  if (p.task && p.task.contact && p.task.kind === t.kind) p.task = null;   // もう 1 人が触った球は追わない
   if (c === 'miss') { R.events.push({ type: 'miss', actor: a, kind: t.kind }); return; }
   a.lastHit = { kind: t.kind, at: R.simT };
   R.ball.vel = shotFor(R, a, t);
