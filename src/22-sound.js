@@ -1,6 +1,6 @@
 // ===== 音（Web Audio で作る。音声ファイルは使わない） =====
 // ブラウザは最初の操作（クリック・タップ・キー）まで音を出せないので、そのときに作る
-const SND = { ctx: null, out: null, noise: null };
+const SND = { ctx: null, out: null, noise: null, pink: null, brown: null };
 
 function sndInit() {
   if (SND.ctx) { if (SND.ctx.state === 'suspended') SND.ctx.resume(); return; }
@@ -41,18 +41,49 @@ function sndNoise(dur, vol, filter, from, to, delay) {
   s.start(t0); s.stop(t0 + dur + 0.02);
 }
 
-// 爆弾を打つ音。強打は「バシッ」、レシーブやトスは「ポン」
-// 手のひらでボールを叩く「パンッ」。低い音程を入れると太鼓のように聞こえるので、短く高いざらつきだけで作る
-// 手のひらでボールを叩く音は「手が当たるバスッ（中くらいの高さのざらつき）」と「ボールの皮が鳴るボンッ（短い中音）」の 2 つ。
-// 低すぎる音程（150Hz 以下）は太鼓に、高い所だけのざらつき（1.5kHz 以上）は電気の「パチッ」に聞こえるので、その間で作る
+// 柔らかいザーッ（ピンク：高い音ほど弱い）と、もっと低く丸いザーッ（ブラウン）。タッチ音に使う
+function sndColoredNoise() {
+  const len = SND.ctx.sampleRate * 2;
+  SND.pink = SND.ctx.createBuffer(1, len, SND.ctx.sampleRate);
+  SND.brown = SND.ctx.createBuffer(1, len, SND.ctx.sampleRate);
+  const p = SND.pink.getChannelData(0), b = SND.brown.getChannelData(0);
+  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, last = 0;
+  for (let i = 0; i < len; i++) {
+    const w = Math.random() * 2 - 1;
+    b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+    b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+    p[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926;
+    last = (last + 0.02 * w) / 1.02; b[i] = last * 3.5;
+  }
+}
+
+// ザーッを、共鳴しない（Q を低くした）ローパスで短く切って出す
+function sndBurst(buf, dur, vol, from, to, delay) {
+  if (!SND.ctx) return;
+  const t0 = SND.ctx.currentTime + (delay || 0), s = SND.ctx.createBufferSource(), f = SND.ctx.createBiquadFilter(), g = SND.ctx.createGain();
+  s.buffer = buf;
+  f.type = 'lowpass'; f.Q.value = 0.5;
+  f.frequency.setValueAtTime(from, t0);
+  f.frequency.exponentialRampToValueAtTime(to, t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + 0.001);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  s.connect(f); f.connect(g); g.connect(SND.out);
+  s.start(t0, Math.random()); s.stop(t0 + dur + 0.05);
+}
+
+// 手でボールを叩く音：手が当たる「パッ」（ピンク）とボールが潰れる「ボフッ」（ブラウン）を重ねる。
+// 本人が聞き比べて選んだ（sound-test.html の I）。音程のある音は太鼓に、高い所だけは電気に、
+// 共鳴するフィルタや音のずらし重ねは金属に聞こえたので、どれも使わない
 function sndHit(kind) {
+  if (!SND.ctx) return;
+  if (!SND.pink) sndColoredNoise();
   if (['attack', 'direct', 'standSpike', 'serve', 'block'].includes(kind)) {
-    sndNoise(0.09, 1.0, 'bandpass', 1300, 600);          // 強打：手が強く当たる「バシッ」
-    sndTone(340, 210, 0.08, 'sine', 0.45);               // ボールの皮が鳴る「ボンッ」
-    sndNoise(0.12, 0.35, 'lowpass', 700, 250);           // 空気が抜ける重さ
+    sndBurst(SND.pink, 0.045, 1.2, 4000, 1500);
+    sndBurst(SND.brown, 0.09, 1.8, 1300, 300, 0.004);
   } else {
-    sndNoise(0.06, 0.6, 'bandpass', 1100, 650);          // レシーブ・トス：軽い「ボスッ」
-    sndTone(420, 290, 0.06, 'sine', 0.3);
+    sndBurst(SND.pink, 0.03, 0.65, 3000, 1200);
+    sndBurst(SND.brown, 0.06, 1.0, 1100, 300, 0.003);
   }
 }
 // 点が入った音。味方の得点は明るく上がる「テレレン↑」、失点は残念に下がる「デロロ↓」
