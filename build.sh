@@ -7,6 +7,8 @@ cat src/00-head.html \
     src/10-config.js \
     src/12-ball.js \
     src/14-shot.js \
+    src/15-actors.js \
+    src/16-rally.js \
     src/30-gym.js \
     src/40-player.js \
     src/41-bomb.js \
@@ -25,6 +27,8 @@ cat src/verify-head.html \
     src/10-config.js \
     src/12-ball.js \
     src/14-shot.js \
+    src/15-actors.js \
+    src/16-rally.js \
     src/verify-tests.js \
     src/99-tail.html > verify.html
 

@@ -125,6 +125,42 @@ test('shotVelocity: 最高点が打つ高さより低くても壊れない（真
   eq(v.x < 0, true);
 });
 
+// ===== 予測と強打 =====
+test('predictDescent: 爆弾を動かさずに、床に触れる場所を当てる', () => {
+  const from = { x: 7, y: 2.6, z: 0 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = shotVelocity(from, { x: -5, z: 2 }, 7);
+  const p = predictDescent(b, CFG.ball.r + 0.01);
+  near(p.x, -5, 0.05, 'x'); near(p.z, 2, 0.05, 'z');
+  eq(p.t > 1 && p.t < 3, true, '時間');
+  eq([b.pos.x, b.pos.y, b.live], [7, 2.6, true], '元の爆弾は動かない');
+});
+
+test('predictDescent: 上りの途中ではなく、降りてくるときの高さで答える', () => {
+  const b = newBall(-3, 1, 0); b.vel = { x: 0, y: 6, z: 0 };
+  const p = predictDescent(b, 2);
+  eq(p.t > 0.6, true);
+});
+
+test('spikeVelocity: 高い打点からの強打は、ネットを越えて狙った所に落ちる', () => {
+  const from = { x: -1.3, y: 3.4, z: -3.5 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = spikeVelocity(from, { x: 4.5, z: -3.8 }, 17);
+  const h = run(b, 3);
+  eq(h && h.side, 1);
+  near(h.x, 4.5, 0.1, 'x'); near(h.z, -3.8, 0.1, 'z');
+  eq(Math.hypot(b.vel.x, b.vel.z) > 10, true, '強い');
+});
+
+test('spikeVelocity: 打点が低ければ速さを落としてネットを越える', () => {
+  const from = { x: -1.3, y: 2.6, z: 0 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = spikeVelocity(from, { x: 5, z: 0 }, 17);
+  const h = run(b, 3);
+  eq(h && h.side, 1);
+  near(h.x, 5, 0.1, 'x');
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');
