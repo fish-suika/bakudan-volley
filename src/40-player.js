@@ -28,7 +28,15 @@ function makePlayer(scene, team) {
   const head = grp('head', neck, 0, 0.1, 0);
   head.rotation.order = 'YXZ';                            // 横を向いてから上下を向く
   part(head, new THREE.SphereGeometry(0.12, 16, 12), skin, 0, 0.1, 0);
-  part(head, new THREE.SphereGeometry(0.125, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), hair, 0, 0.115, -0.01);
+  const hairMesh = part(head, new THREE.SphereGeometry(0.125, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), hair, 0, 0.115, -0.01);
+  const afro = new THREE.Group();                         // 爆発で髪がアフロになる（普段は隠す）
+  afro.visible = false;
+  head.add(afro);
+  const afroMat = lam(0x14100c);
+  for (const [x, y, z] of [[0, 0.25, 0], [0.11, 0.2, 0], [-0.11, 0.2, 0], [0, 0.2, 0.11], [0, 0.2, -0.11],
+    [0.08, 0.14, 0.08], [-0.08, 0.14, 0.08], [0.08, 0.14, -0.08], [-0.08, 0.14, -0.08]]) {
+    part(afro, new THREE.SphereGeometry(0.1, 10, 8), afroMat, x, y, z);
+  }
 
   for (const [s, L] of [[1, 'L'], [-1, 'R']]) {
     const sh = grp('shoulder' + L, spine, s * 0.25, 0.54, 0);
@@ -44,7 +52,8 @@ function makePlayer(scene, team) {
     part(kn, limb(0.42, 0.06, 0.045), skin, 0, -0.21, 0);
     part(kn, new THREE.BoxGeometry(0.11, 0.08, 0.24), shoe, 0, -0.41, 0.04);
   }
-  return { root, tumble, j, team, phase: Math.random() * 6, look: { yaw: 0, pitch: 0 }, tx: 0, tz: 0 };
+  return { root, tumble, j, team, phase: Math.random() * 6, look: { yaw: 0, pitch: 0 }, tx: 0, tz: 0,
+    mats: { skin, shirt, shorts }, base: { skin: 0xeec39a, shirt: col.shirt, shorts: col.shorts }, hairMesh, afro, soot: false };
 }
 
 // 足元を (x, z) に置き、ネットのほうを向かせる
@@ -81,6 +90,7 @@ function lookAtTarget(pl, target, dt) {
 // 吹っ飛んでいる間（actor.fly）は、体の中心で回し、倒れて、起き上がる
 function updatePlayer(pl, a, dt, simT, focus) {
   const f = a.fly;
+  if (!!a.soot !== pl.soot) setSoot(pl, !!a.soot);
   const target = f ? flyPose(f, simT) : motionFor(a, simT);
   if (!pl.cur) pl.cur = { hipsDrop: 0 };
   const k = Math.min(1, dt * (f ? 14 : 24));               // クリップの速い動き（振り下ろし）が鈍らないよう、普段は速めに寄せる
@@ -128,4 +138,15 @@ function placeFlying(pl, f, dt) {
   T.rotation.set(pl.tx, 0, pl.tz);
   const cy = 0.28 + (B.center - 0.28) * up;              // 寝ているとき体の中心は床から 0.28m
   pl.root.position.set(f.pos.x, cy - B.center, f.pos.z);
+}
+
+// すすだらけ（顔は焦げ茶、服は暗く、髪はアフロ）と、元に戻す
+function setSoot(pl, on) {
+  pl.soot = on;
+  pl.mats.skin.color.setHex(on ? 0x3a2c22 : pl.base.skin);
+  pl.mats.shirt.color.setHex(pl.base.shirt);
+  pl.mats.shorts.color.setHex(pl.base.shorts);
+  if (on) { pl.mats.shirt.color.multiplyScalar(0.3); pl.mats.shorts.color.multiplyScalar(0.4); }
+  pl.hairMesh.visible = !on;
+  pl.afro.visible = on;
 }
