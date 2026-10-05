@@ -53,7 +53,7 @@
         showToast(e.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
       }
       else if (e.type === 'point') {
-        sndWhistle();
+        sndPoint(e.scorer === 0);
         setScore(e.score);
         if (e.score[e.scorer] < CFG.winScore) showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);   // 最後の 1 点は勝敗の画面に任せる
       }
@@ -65,7 +65,7 @@
       else if (e.type === 'collide') sndCrash();
     }
     R.events.length = 0;
-    if (R.state === 'choose') setTimer(R.choose.left / CFG.choiceTime);
+    if (R.state === 'choose') { setTimer(R.choose.left / CFG.choiceTime); setCount(R.choose.left); }
     const slow = R.state === 'choose' ? CFG.slowScale : 1;
     const shown = R.ball && !(R.state === 'boom' && R.boom.fired) ? R.ball : null;   // 爆発したら爆弾を消す
     const focus = R.ball ? R.ball.pos : { x: 0, y: 3, z: 0 };

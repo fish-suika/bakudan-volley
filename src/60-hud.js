@@ -11,9 +11,13 @@ function showToast(text, sec) {
 const SCENE_TEXT = { serve: 'サーブ番', incoming: '相手が打った！', tossed: 'トスが上がった！' };
 function showChoice(scene, attack) {
   document.getElementById('actions').classList.add('on');
-  const el = document.getElementById('scene');
-  el.textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
-  el.classList.add('on');
+  document.getElementById('sceneText').textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
+  setCount(CFG.choiceTime);
+  document.getElementById('scene').classList.add('on');
+}
+// 選べる残り時間を、場面の文字の横に秒で出す（4 → 1）
+function setCount(left) {
+  document.getElementById('count').textContent = Math.max(1, Math.ceil(left));
 }
 function hideChoice() {
   document.getElementById('actions').classList.remove('on');

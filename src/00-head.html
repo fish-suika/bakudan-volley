@@ -31,6 +31,7 @@
     font-size:clamp(16px,3vw,22px);font-weight:700;letter-spacing:.1em;text-shadow:0 2px 10px #000;white-space:nowrap;
     opacity:0;transition:opacity .15s;pointer-events:none}
   #scene.on{opacity:1}
+  #count{margin-left:14px;font-size:1.5em;color:#ffd04a;font-variant-numeric:tabular-nums}
 
   /* ---- お知らせ ---- */
   #toast{position:fixed;left:50%;top:22%;z-index:7;transform:translate(-50%,-50%);width:max-content;max-width:90vw;
@@ -64,7 +65,7 @@
 </head>
 <body>
 <div id="hint">スローになったら 1〜4 キー（スマホはボタン）で次の行動を選ぶ</div>
-<div id="scene"></div>
+<div id="scene"><span id="sceneText"></span><b id="count"></b></div>
 <div id="actions">
   <button data-act="receive"><b>1</b>レシーブ</button>
   <button data-act="attack"><b>2</b>アタック</button>

@@ -42,18 +42,24 @@ function sndNoise(dur, vol, filter, from, to, delay) {
 }
 
 // 爆弾を打つ音。強打は「バシッ」、レシーブやトスは「ポン」
+// 手のひらでボールを叩く「パンッ」。低い音程を入れると太鼓のように聞こえるので、短く高いざらつきだけで作る
 function sndHit(kind) {
   if (['attack', 'direct', 'standSpike', 'serve', 'block'].includes(kind)) {
-    sndNoise(0.09, 0.9, 'bandpass', 2600, 1100);
-    sndTone(150, 60, 0.12, 'sine', 0.7);
+    sndNoise(0.045, 1.0, 'highpass', 1800, 1200);        // 強打：乾いた「パァン」
+    sndNoise(0.07, 0.5, 'bandpass', 3200, 1800);
   } else {
-    sndNoise(0.05, 0.4, 'bandpass', 1500, 900);
-    sndTone(240, 130, 0.09, 'sine', 0.35);
+    sndNoise(0.03, 0.55, 'highpass', 1400, 1000);        // レシーブ・トス：軽い「パッ」
+    sndNoise(0.04, 0.25, 'bandpass', 2400, 1500);
   }
 }
-function sndWhistle() {                                   // 審判の笛（ピッ、ピー）
-  sndTone(3100, 3000, 0.12, 'square', 0.12);
-  sndTone(3100, 2950, 0.35, 'square', 0.12, 0.16);
+// 点が入った音。味方の得点は明るく上がる「テレレン↑」、失点は残念に下がる「デロロ↓」
+function sndPoint(ours) {
+  const notes = ours ? [523, 659, 784, 1047] : [392, 330, 262, 196];
+  notes.forEach((f, i) => {
+    const last = i === notes.length - 1, dur = last ? 0.35 : 0.11;
+    sndTone(f, f * (ours ? 1 : 0.97), dur, 'triangle', 0.35, i * 0.1);
+    sndTone(f * 2, f * 2, dur * 0.8, 'square', 0.05, i * 0.1);   // 少しだけ明るさを足す
+  });
 }
 function sndBoom() {                                      // 爆発：低い「ドーン」とザーッという爆風
   sndTone(80, 28, 1.3, 'sine', 1.0);

@@ -31,6 +31,7 @@
     font-size:clamp(16px,3vw,22px);font-weight:700;letter-spacing:.1em;text-shadow:0 2px 10px #000;white-space:nowrap;
     opacity:0;transition:opacity .15s;pointer-events:none}
   #scene.on{opacity:1}
+  #count{margin-left:14px;font-size:1.5em;color:#ffd04a;font-variant-numeric:tabular-nums}
 
   /* ---- お知らせ ---- */
   #toast{position:fixed;left:50%;top:22%;z-index:7;transform:translate(-50%,-50%);width:max-content;max-width:90vw;
@@ -64,7 +65,7 @@
 </head>
 <body>
 <div id="hint">スローになったら 1〜4 キー（スマホはボタン）で次の行動を選ぶ</div>
-<div id="scene"></div>
+<div id="scene"><span id="sceneText"></span><b id="count"></b></div>
 <div id="actions">
   <button data-act="receive"><b>1</b>レシーブ</button>
   <button data-act="attack"><b>2</b>アタック</button>
@@ -878,18 +879,24 @@ function sndNoise(dur, vol, filter, from, to, delay) {
 }
 
 // 爆弾を打つ音。強打は「バシッ」、レシーブやトスは「ポン」
+// 手のひらでボールを叩く「パンッ」。低い音程を入れると太鼓のように聞こえるので、短く高いざらつきだけで作る
 function sndHit(kind) {
   if (['attack', 'direct', 'standSpike', 'serve', 'block'].includes(kind)) {
-    sndNoise(0.09, 0.9, 'bandpass', 2600, 1100);
-    sndTone(150, 60, 0.12, 'sine', 0.7);
+    sndNoise(0.045, 1.0, 'highpass', 1800, 1200);        // 強打：乾いた「パァン」
+    sndNoise(0.07, 0.5, 'bandpass', 3200, 1800);
   } else {
-    sndNoise(0.05, 0.4, 'bandpass', 1500, 900);
-    sndTone(240, 130, 0.09, 'sine', 0.35);
+    sndNoise(0.03, 0.55, 'highpass', 1400, 1000);        // レシーブ・トス：軽い「パッ」
+    sndNoise(0.04, 0.25, 'bandpass', 2400, 1500);
   }
 }
-function sndWhistle() {                                   // 審判の笛（ピッ、ピー）
-  sndTone(3100, 3000, 0.12, 'square', 0.12);
-  sndTone(3100, 2950, 0.35, 'square', 0.12, 0.16);
+// 点が入った音。味方の得点は明るく上がる「テレレン↑」、失点は残念に下がる「デロロ↓」
+function sndPoint(ours) {
+  const notes = ours ? [523, 659, 784, 1047] : [392, 330, 262, 196];
+  notes.forEach((f, i) => {
+    const last = i === notes.length - 1, dur = last ? 0.35 : 0.11;
+    sndTone(f, f * (ours ? 1 : 0.97), dur, 'triangle', 0.35, i * 0.1);
+    sndTone(f * 2, f * 2, dur * 0.8, 'square', 0.05, i * 0.1);   // 少しだけ明るさを足す
+  });
 }
 function sndBoom() {                                      // 爆発：低い「ドーン」とザーッという爆風
   sndTone(80, 28, 1.3, 'sine', 1.0);
@@ -1431,9 +1438,13 @@ function showToast(text, sec) {
 const SCENE_TEXT = { serve: 'サーブ番', incoming: '相手が打った！', tossed: 'トスが上がった！' };
 function showChoice(scene, attack) {
   document.getElementById('actions').classList.add('on');
-  const el = document.getElementById('scene');
-  el.textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
-  el.classList.add('on');
+  document.getElementById('sceneText').textContent = scene === 'incoming' && attack ? 'アタックが来る！' : SCENE_TEXT[scene];
+  setCount(CFG.choiceTime);
+  document.getElementById('scene').classList.add('on');
+}
+// 選べる残り時間を、場面の文字の横に秒で出す（4 → 1）
+function setCount(left) {
+  document.getElementById('count').textContent = Math.max(1, Math.ceil(left));
 }
 function hideChoice() {
   document.getElementById('actions').classList.remove('on');
@@ -1508,7 +1519,7 @@ function hideResult() { document.getElementById('result').classList.remove('on')
         showToast(e.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
       }
       else if (e.type === 'point') {
-        sndWhistle();
+        sndPoint(e.scorer === 0);
         setScore(e.score);
         if (e.score[e.scorer] < CFG.winScore) showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);   // 最後の 1 点は勝敗の画面に任せる
       }
@@ -1520,7 +1531,7 @@ function hideResult() { document.getElementById('result').classList.remove('on')
       else if (e.type === 'collide') sndCrash();
     }
     R.events.length = 0;
-    if (R.state === 'choose') setTimer(R.choose.left / CFG.choiceTime);
+    if (R.state === 'choose') { setTimer(R.choose.left / CFG.choiceTime); setCount(R.choose.left); }
     const slow = R.state === 'choose' ? CFG.slowScale : 1;
     const shown = R.ball && !(R.state === 'boom' && R.boom.fired) ? R.ball : null;   // 爆発したら爆弾を消す
     const focus = R.ball ? R.ball.pos : { x: 0, y: 3, z: 0 };
