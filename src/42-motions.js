@@ -279,8 +279,8 @@ const CLIPS = {
   toss: [[-0.6, 'tossReady'], [-0.1, 'toss'], [0, 'tossPush'], [0.3, 'tossPush'], [0.6, 'ready']],
   block: [[-0.75, 'blockReady'], [-0.55, 'blockDip'], [-0.43, 'blockTakeoff'], [-0.1, 'blockReach'], [0.15, 'blockReach'],
     [0.43, 'landing'], [0.75, 'ready']],
-  serve: [[-1.6, 'serveHold'], [-0.7, 'serveHold'], [-0.55, 'serveToss'], [-0.45, 'step2'], [-0.4, 'armsBack'], [-0.36, 'takeoff'],
-    [-0.2, 'spikeBack'], [-0.04, 'spikeBack'], [0, 'spikeHit'], [0.15, 'spikeFollow'], [0.38, 'landing'], [0.7, 'ready']],
+  serve: [[-2.2, 'serveHold'], [-1.35, 'serveHold'], [-1.25, 'serveToss'], [-1.0, 'approachReady'], [-0.8, 'step1'], [-0.62, 'step2'],
+    [-0.5, 'armsBack'], [-0.43, 'takeoff'], [-0.25, 'spikeBack'], [-0.04, 'spikeBack'], [0, 'spikeHit'], [0.15, 'spikeFollow'], [0.43, 'landing'], [0.75, 'ready']],
   whiff: [[-0.4, 'ready'], [-0.2, 'spikeBack'], [0, 'spikeHit'], [0.2, 'spikeFollow'], [0.6, 'ready']],
 };
 CLIPS.return = CLIPS.receive;
@@ -292,7 +292,7 @@ const WAIT_POSE = { receive: 'receiveReady', bump: 'receiveReady', return: 'rece
 
 // クリップの 0 の時刻（まだ決まっていなければ null）
 function clipAnchor(t) {
-  if (t.kind === 'serve') return t.hold + CFG.motion.serveContact;
+  if (t.kind === 'serve') return t.hold + CFG.jumpServe.tossTime;
   if (t.kind === 'block' || t.kind === 'blockNoop') return t.jumpAt != null ? t.jumpAt + riseTime() : null;
   if (t.kind === 'whiff') return t.start + 0.4;
   return t.contactAt != null ? t.contactAt : null;

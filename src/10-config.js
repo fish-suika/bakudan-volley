@@ -18,8 +18,15 @@ const CFG = {
   runSpeed: 7,                                            // 選手が走る速さ m/s
   reach: 1.0,                                             // 爆弾に手が届く横の距離 m
   jumpH: 0.9,                                             // アタック・ブロック・サーブで跳ぶ高さ m
-  contactH: { receive: 0.8, toss: 2.3, attack: 3.4, direct: 2.4, serve: 2.8 },   // 爆弾に触る高さ m
-  serveSpot: 9.5,                                         // サーブを打つ位置（ネットからの距離。エンドラインの 0.5m 外）
+  contactH: { receive: 0.8, toss: 2.3, attack: 3.4, direct: 2.4, serve: 3.3 },   // 爆弾に触る高さ m
+  serveSpot: 12,                                          // サーブを打つ位置（ネットからの距離）。エンドラインの 3m 後ろ。ジャンプサーブの助走を始める所
+  jumpServe: {
+    tossTime: 1.3,                                        // トスを上げてから打つまで（秒）。トスが高さ contactH.serve を降りてくる時刻
+    takeoffX: 9.15,                                       // 踏み切る位置（ネットからの距離）。エンドラインの 0.15m 手前
+    contactIn: 0.8,                                       // 打つ所（エンドラインからコートの中へ m）
+    approachDelay: 0.2,                                   // トスを上げてから助走を始めるまで（秒）
+    speed: 15,                                            // 打球の速さ m/s（ネットにかかるなら自動で遅くなる）
+  },
   serveHold: 0.9,                                         // サーブ前に構える「真剣な間」（秒）
   hardSpeed: 13,                                          // これより速い球は「強い球」（直接打ち返しにくい）
   shots: {
@@ -66,7 +73,6 @@ const CFG = {
     approachDist: 2.6,                                    // アタックの助走を始める所（打つ所からネットと反対へ m）
     approachTime: 0.75,                                   // 跳ぶ何秒前から助走するか
     broad: 0.6,                                           // 踏み切り位置（打つ所の手前 m）。空中で前へ流れて打つ所の真下に来る
-    serveContact: 0.68,                                   // サーブでトスを上げてから打つまで（秒。トスの初速 4.5m/s で高さ 2.8m に戻るまで）
     strideLen: 1.5,                                       // 走るとき脚が一回りする距離 m
     shuffleDist: 2.5,                                     // これより近い所へはサイドステップ（ネットを向いたまま）
   },

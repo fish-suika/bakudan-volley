@@ -41,8 +41,15 @@ const CFG = {
   runSpeed: 7,                                            // 選手が走る速さ m/s
   reach: 1.0,                                             // 爆弾に手が届く横の距離 m
   jumpH: 0.9,                                             // アタック・ブロック・サーブで跳ぶ高さ m
-  contactH: { receive: 0.8, toss: 2.3, attack: 3.4, direct: 2.4, serve: 2.8 },   // 爆弾に触る高さ m
-  serveSpot: 9.5,                                         // サーブを打つ位置（ネットからの距離。エンドラインの 0.5m 外）
+  contactH: { receive: 0.8, toss: 2.3, attack: 3.4, direct: 2.4, serve: 3.3 },   // 爆弾に触る高さ m
+  serveSpot: 12,                                          // サーブを打つ位置（ネットからの距離）。エンドラインの 3m 後ろ。ジャンプサーブの助走を始める所
+  jumpServe: {
+    tossTime: 1.3,                                        // トスを上げてから打つまで（秒）。トスが高さ contactH.serve を降りてくる時刻
+    takeoffX: 9.15,                                       // 踏み切る位置（ネットからの距離）。エンドラインの 0.15m 手前
+    contactIn: 0.8,                                       // 打つ所（エンドラインからコートの中へ m）
+    approachDelay: 0.2,                                   // トスを上げてから助走を始めるまで（秒）
+    speed: 15,                                            // 打球の速さ m/s（ネットにかかるなら自動で遅くなる）
+  },
   serveHold: 0.9,                                         // サーブ前に構える「真剣な間」（秒）
   hardSpeed: 13,                                          // これより速い球は「強い球」（直接打ち返しにくい）
   shots: {
@@ -89,7 +96,6 @@ const CFG = {
     approachDist: 2.6,                                    // アタックの助走を始める所（打つ所からネットと反対へ m）
     approachTime: 0.75,                                   // 跳ぶ何秒前から助走するか
     broad: 0.6,                                           // 踏み切り位置（打つ所の手前 m）。空中で前へ流れて打つ所の真下に来る
-    serveContact: 0.68,                                   // サーブでトスを上げてから打つまで（秒。トスの初速 4.5m/s で高さ 2.8m に戻るまで）
     strideLen: 1.5,                                       // 走るとき脚が一回りする距離 m
     shuffleDist: 2.5,                                     // これより近い所へはサイドステップ（ネットを向いたまま）
   },
@@ -469,9 +475,20 @@ function retarget(R, team) {
   for (const a of R.actors) if (a.team === team && a.task && a.task.pending && a.task.kind !== 'block') aimTask(R, a);
 }
 
+// ジャンプサーブのトス：手（高さ 2.0m）から、tossTime 秒後に高さ contactH.serve を降りてくるとき、打つ所の真上に来る初速
+function serveToss(a) {
+  const J = CFG.jumpServe, d = dirOf(a.team), T = J.tossTime, x0 = a.x + d * 0.3, xc = -d * (CFG.court.halfLen - J.contactIn);
+  return { pos: { x: x0, y: 2.0, z: a.z }, vel: { x: (xc - x0) / T, y: (CFG.contactH.serve - 2.0 + 0.5 * CFG.gravity * T * T) / T, z: 0 } };
+}
+// ジャンプサーブ：構えて、トスを上げ、エンドラインの 3m 後ろから助走し、ラインの手前で踏み切って、コートの中の空中で打つ
 function giveServe(R, a, ok) {
+  const J = CFG.jumpServe, d = dirOf(a.team);
   const t = giveTask(R, a, 'serve', ok, { h: CFG.contactH.serve, pending: false, hold: R.simT + CFG.serveHold, jump: true });
-  t.jumpAt = t.hold + 0.3;
+  t.approachSpot = { x: a.x, z: a.z };
+  t.approachStart = t.hold + J.approachDelay;
+  t.takeoff = { x: -d * J.takeoffX, z: a.z };
+  t.at = { x: -d * (CFG.court.halfLen - J.contactIn), z: a.z };
+  t.jumpAt = t.hold + J.tossTime - riseTime();
 }
 function giveReceive(R, a, ok) { return giveTask(R, a, 'receive', ok, { h: CFG.contactH.receive }); }
 function giveReturn(R, a, ok) { return giveTask(R, a, 'return', ok, { h: CFG.contactH.receive }); }
@@ -574,7 +591,7 @@ function shotFor(R, a, t) {
     case 'block': return spikeVelocity(from, opp(1.5, 4), 10);
     case 'return': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shank();
     case 'bump': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shotVelocity(from, { x: p.x - d * 0.6, z: p.z + 0.4 }, from.y + 1.2);   // 足元に落とす
-    case 'serve': return t.ok ? shotVelocity(from, opp(3, 8.5), S.serveApex) : shotVelocity(from, { x: -d * 0.6, z: p.z * 0.5 }, from.y + 0.3);   // ネットに届かない
+    case 'serve': return t.ok ? spikeVelocity(from, opp(4, 8.5), CFG.jumpServe.speed) : shotVelocity(from, { x: -d * 0.6, z: p.z * 0.5 }, from.y + 0.3);   // ネットに届かない
   }
   return { x: 0, y: 0, z: 0 };
 }
@@ -635,8 +652,7 @@ function tickRally(R, realDt) {
     b.pos = { x: a.x + d * 0.35, y: a.y + 1.15, z: a.z };
     if (t && t.kind === 'serve' && R.simT >= t.hold) {    // 構えの間が終わったらトスを上げる
       b.held = null;
-      b.pos = { x: a.x + d * 0.3, y: 2.0, z: a.z };
-      b.vel = { x: d * 0.4, y: 4.5, z: 0 };
+      const s = serveToss(a); b.pos = s.pos; b.vel = s.vel;
     }
   } else if (b && b.live) {
     for (const a of R.actors) { const c = checkContact(a, b); if (c) resolveContact(R, a, c); }
@@ -1152,8 +1168,8 @@ const CLIPS = {
   toss: [[-0.6, 'tossReady'], [-0.1, 'toss'], [0, 'tossPush'], [0.3, 'tossPush'], [0.6, 'ready']],
   block: [[-0.75, 'blockReady'], [-0.55, 'blockDip'], [-0.43, 'blockTakeoff'], [-0.1, 'blockReach'], [0.15, 'blockReach'],
     [0.43, 'landing'], [0.75, 'ready']],
-  serve: [[-1.6, 'serveHold'], [-0.7, 'serveHold'], [-0.55, 'serveToss'], [-0.45, 'step2'], [-0.4, 'armsBack'], [-0.36, 'takeoff'],
-    [-0.2, 'spikeBack'], [-0.04, 'spikeBack'], [0, 'spikeHit'], [0.15, 'spikeFollow'], [0.38, 'landing'], [0.7, 'ready']],
+  serve: [[-2.2, 'serveHold'], [-1.35, 'serveHold'], [-1.25, 'serveToss'], [-1.0, 'approachReady'], [-0.8, 'step1'], [-0.62, 'step2'],
+    [-0.5, 'armsBack'], [-0.43, 'takeoff'], [-0.25, 'spikeBack'], [-0.04, 'spikeBack'], [0, 'spikeHit'], [0.15, 'spikeFollow'], [0.43, 'landing'], [0.75, 'ready']],
   whiff: [[-0.4, 'ready'], [-0.2, 'spikeBack'], [0, 'spikeHit'], [0.2, 'spikeFollow'], [0.6, 'ready']],
 };
 CLIPS.return = CLIPS.receive;
@@ -1165,7 +1181,7 @@ const WAIT_POSE = { receive: 'receiveReady', bump: 'receiveReady', return: 'rece
 
 // クリップの 0 の時刻（まだ決まっていなければ null）
 function clipAnchor(t) {
-  if (t.kind === 'serve') return t.hold + CFG.motion.serveContact;
+  if (t.kind === 'serve') return t.hold + CFG.jumpServe.tossTime;
   if (t.kind === 'block' || t.kind === 'blockNoop') return t.jumpAt != null ? t.jumpAt + riseTime() : null;
   if (t.kind === 'whiff') return t.start + 0.4;
   return t.contactAt != null ? t.contactAt : null;
@@ -1966,7 +1982,7 @@ test('motionFor：サーブはトスを上げる時刻（hold）を基準に、�
   const a = newActor(0, 0, -9.5, 0);
   a.task = { kind: 'serve', contact: true, hold: 5, at: { x: -9.5, z: 0 } };
   nearJoint(motionFor(a, 4.5), POSES.serveHold, 'shoulderL', '構え');
-  nearJoint(motionFor(a, 5 + CFG.motion.serveContact), POSES.spikeHit, 'shoulderR', '打つ瞬間');
+  nearJoint(motionFor(a, 5 + CFG.jumpServe.tossTime), POSES.spikeHit, 'shoulderR', '打つ瞬間');
 });
 
 test('motionFor：よろけているときは stagger、走っているときは歩いた距離で脚が回る', () => {
@@ -2109,6 +2125,24 @@ test('リプレイ：applyFrame で、記録した位置・回転・関節・爆
   eq([b2.g.visible, b2.g.position.x], [true, 1]);
   applyFrame(frameAt(rec, 1), [target], b2);
   eq([b2.g.visible, b2.shadow.visible], [false, false]);
+});
+
+test('ジャンプサーブ：エンドラインの外から助走し、ラインの手前で踏み切り、コートの中の空中で打って、相手コートに落ちる', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  choose(R, 'serve');
+  let takeoffX = null, hit = null;
+  const ev = [];
+  for (let i = 0; i < 6 * 60; i++) {
+    tickRally(R, 1 / 60);
+    if (takeoffX === null && R.me.y > 0) takeoffX = R.me.x;
+    for (const e of R.events.splice(0)) { ev.push(e); if (!hit && e.type === 'hit' && e.kind === 'serve') hit = { x: R.ball.pos.x, y: R.ball.pos.y, mx: R.me.x }; }
+  }
+  near(takeoffX, -CFG.jumpServe.takeoffX, 0.25, '踏み切りはラインの手前');
+  eq(takeoffX <= -CFG.court.halfLen, true, 'ラインを踏み越えていない');
+  eq(hit !== null && hit.x > -CFG.court.halfLen, true, 'コートの中の空中で打つ');
+  near(hit.y, CFG.contactH.serve, 0.3, '打つ高さ');
+  eq(boomSide(ev), 1);
 });
 
 // ===== 結果表示 =====

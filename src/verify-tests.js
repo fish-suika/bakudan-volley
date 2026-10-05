@@ -705,7 +705,7 @@ test('motionFor：サーブはトスを上げる時刻（hold）を基準に、�
   const a = newActor(0, 0, -9.5, 0);
   a.task = { kind: 'serve', contact: true, hold: 5, at: { x: -9.5, z: 0 } };
   nearJoint(motionFor(a, 4.5), POSES.serveHold, 'shoulderL', '構え');
-  nearJoint(motionFor(a, 5 + CFG.motion.serveContact), POSES.spikeHit, 'shoulderR', '打つ瞬間');
+  nearJoint(motionFor(a, 5 + CFG.jumpServe.tossTime), POSES.spikeHit, 'shoulderR', '打つ瞬間');
 });
 
 test('motionFor：よろけているときは stagger、走っているときは歩いた距離で脚が回る', () => {
@@ -848,6 +848,24 @@ test('リプレイ：applyFrame で、記録した位置・回転・関節・爆
   eq([b2.g.visible, b2.g.position.x], [true, 1]);
   applyFrame(frameAt(rec, 1), [target], b2);
   eq([b2.g.visible, b2.shadow.visible], [false, false]);
+});
+
+test('ジャンプサーブ：エンドラインの外から助走し、ラインの手前で踏み切り、コートの中の空中で打って、相手コートに落ちる', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  choose(R, 'serve');
+  let takeoffX = null, hit = null;
+  const ev = [];
+  for (let i = 0; i < 6 * 60; i++) {
+    tickRally(R, 1 / 60);
+    if (takeoffX === null && R.me.y > 0) takeoffX = R.me.x;
+    for (const e of R.events.splice(0)) { ev.push(e); if (!hit && e.type === 'hit' && e.kind === 'serve') hit = { x: R.ball.pos.x, y: R.ball.pos.y, mx: R.me.x }; }
+  }
+  near(takeoffX, -CFG.jumpServe.takeoffX, 0.25, '踏み切りはラインの手前');
+  eq(takeoffX <= -CFG.court.halfLen, true, 'ラインを踏み越えていない');
+  eq(hit !== null && hit.x > -CFG.court.halfLen, true, 'コートの中の空中で打つ');
+  near(hit.y, CFG.contactH.serve, 0.3, '打つ高さ');
+  eq(boomSide(ev), 1);
 });
 
 // ===== 結果表示 =====

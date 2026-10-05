@@ -139,9 +139,20 @@ function retarget(R, team) {
   for (const a of R.actors) if (a.team === team && a.task && a.task.pending && a.task.kind !== 'block') aimTask(R, a);
 }
 
+// ジャンプサーブのトス：手（高さ 2.0m）から、tossTime 秒後に高さ contactH.serve を降りてくるとき、打つ所の真上に来る初速
+function serveToss(a) {
+  const J = CFG.jumpServe, d = dirOf(a.team), T = J.tossTime, x0 = a.x + d * 0.3, xc = -d * (CFG.court.halfLen - J.contactIn);
+  return { pos: { x: x0, y: 2.0, z: a.z }, vel: { x: (xc - x0) / T, y: (CFG.contactH.serve - 2.0 + 0.5 * CFG.gravity * T * T) / T, z: 0 } };
+}
+// ジャンプサーブ：構えて、トスを上げ、エンドラインの 3m 後ろから助走し、ラインの手前で踏み切って、コートの中の空中で打つ
 function giveServe(R, a, ok) {
+  const J = CFG.jumpServe, d = dirOf(a.team);
   const t = giveTask(R, a, 'serve', ok, { h: CFG.contactH.serve, pending: false, hold: R.simT + CFG.serveHold, jump: true });
-  t.jumpAt = t.hold + 0.3;
+  t.approachSpot = { x: a.x, z: a.z };
+  t.approachStart = t.hold + J.approachDelay;
+  t.takeoff = { x: -d * J.takeoffX, z: a.z };
+  t.at = { x: -d * (CFG.court.halfLen - J.contactIn), z: a.z };
+  t.jumpAt = t.hold + J.tossTime - riseTime();
 }
 function giveReceive(R, a, ok) { return giveTask(R, a, 'receive', ok, { h: CFG.contactH.receive }); }
 function giveReturn(R, a, ok) { return giveTask(R, a, 'return', ok, { h: CFG.contactH.receive }); }
@@ -244,7 +255,7 @@ function shotFor(R, a, t) {
     case 'block': return spikeVelocity(from, opp(1.5, 4), 10);
     case 'return': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shank();
     case 'bump': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shotVelocity(from, { x: p.x - d * 0.6, z: p.z + 0.4 }, from.y + 1.2);   // 足元に落とす
-    case 'serve': return t.ok ? shotVelocity(from, opp(3, 8.5), S.serveApex) : shotVelocity(from, { x: -d * 0.6, z: p.z * 0.5 }, from.y + 0.3);   // ネットに届かない
+    case 'serve': return t.ok ? spikeVelocity(from, opp(4, 8.5), CFG.jumpServe.speed) : shotVelocity(from, { x: -d * 0.6, z: p.z * 0.5 }, from.y + 0.3);   // ネットに届かない
   }
   return { x: 0, y: 0, z: 0 };
 }
@@ -305,8 +316,7 @@ function tickRally(R, realDt) {
     b.pos = { x: a.x + d * 0.35, y: a.y + 1.15, z: a.z };
     if (t && t.kind === 'serve' && R.simT >= t.hold) {    // 構えの間が終わったらトスを上げる
       b.held = null;
-      b.pos = { x: a.x + d * 0.3, y: 2.0, z: a.z };
-      b.vel = { x: d * 0.4, y: 4.5, z: 0 };
+      const s = serveToss(a); b.pos = s.pos; b.vel = s.vel;
     }
   } else if (b && b.live) {
     for (const a of R.actors) { const c = checkContact(a, b); if (c) resolveContact(R, a, c); }
