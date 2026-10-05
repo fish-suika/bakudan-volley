@@ -15,8 +15,9 @@ function predictDescent(ball, h, maxT) {
   const b = { pos: { ...ball.pos }, vel: { ...ball.vel }, live: true };
   const dt = 1 / 120;
   for (let t = 0; t < (maxT || 6); ) {
-    if (stepBall(b, dt, [], () => 0.5)) return null;
+    const hit = stepBall(b, dt, [], () => 0.5);
     t += dt;
+    if (hit) return h <= CFG.ball.r + 0.05 ? { x: hit.x, z: hit.z, t } : null;   // 床の高さを聞かれたなら、床に触れた場所が答え（刻みの間に抜けるため）
     if (b.vel.y < 0 && b.pos.y <= h) return { x: b.pos.x, z: b.pos.z, t };
   }
   return null;
