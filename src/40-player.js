@@ -83,7 +83,7 @@ function updatePlayer(pl, a, dt, simT, focus) {
   const f = a.fly;
   const target = f ? flyPose(f, simT) : motionFor(a, simT);
   if (!pl.cur) pl.cur = { hipsDrop: 0 };
-  const k = Math.min(1, dt * 14);
+  const k = Math.min(1, dt * (f ? 14 : 24));               // クリップの速い動き（振り下ろし）が鈍らないよう、普段は速めに寄せる
   for (const name of JOINTS) {
     const to = target[name] || [0, 0, 0];
     const c = pl.cur[name] || (pl.cur[name] = [0, 0, 0]);
@@ -93,7 +93,9 @@ function updatePlayer(pl, a, dt, simT, focus) {
   applyPose(pl, pl.cur);
   if (f) { placeFlying(pl, f, dt); return; }
   pl.tumble.rotation.set(0, 0, 0);
-  pl.root.rotation.y = pl.team === 0 ? Math.PI / 2 : -Math.PI / 2;   // 吹っ飛びで回った向きを戻す
+  const yaw = facingFor(a);                               // 遠くへは走る向き、近くへはネットを向いたまま。なめらかに回す
+  const dyaw = Math.atan2(Math.sin(yaw - pl.root.rotation.y), Math.cos(yaw - pl.root.rotation.y));
+  pl.root.rotation.y += dyaw * Math.min(1, dt * 10);
   pl.tx = pl.tz = 0;
   pl.root.position.set(a.x, a.y, a.z);
   if (!a.moving && a.y === 0 && !a.task) pl.j.hips.position.y += Math.sin(simT * 3 + pl.phase) * 0.012;   // 構えたまま小さく揺れる
