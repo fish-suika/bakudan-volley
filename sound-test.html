@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>タッチ音の聞き比べ — 爆弾バレー</title>
+<style>
+  body{font-family:"Yu Gothic UI","Hiragino Kaku Gothic ProN",system-ui,sans-serif;background:#1c1c1e;color:#eee;padding:20px 16px;line-height:1.7;max-width:720px;margin:0 auto}
+  h1{font-size:20px;margin-bottom:6px}
+  p{font-size:14px;opacity:.8;margin:0 0 18px}
+  .row{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #333;flex-wrap:wrap}
+  .row b{font-size:22px;width:1.6em;color:#ffd04a}
+  .row span{flex:1 1 220px;font-size:14px}
+  button{font:700 15px inherit;padding:10px 16px;border-radius:10px;border:2px solid #ffd04a;background:#3c2c0a;color:#fff;cursor:pointer}
+  button:active{transform:scale(.96)}
+  .ref b{color:#888}
+</style>
+</head>
+<body>
+<h1>タッチ音の聞き比べ</h1>
+<p>ボタンを押すと鳴ります。「強打」はアタック・サーブ・ブロック、「軽打」はレシーブ・トスの音です。いちばん「手でボールを叩いた音」に近いものを、記号で教えてください（例：B の強打と D の軽打、など組み合わせでも大丈夫です）。</p>
+
+<div class="row"><b>A</b><span>平手（ざらつきだけ・体育館の響きあり）</span><button data-s="A" data-k="hard">強打</button><button data-s="A" data-k="soft">軽打</button></div>
+<div class="row"><b>B</b><span>平手・重め（低めのざらつき＋空気の重さ・響きあり）</span><button data-s="B" data-k="hard">強打</button><button data-s="B" data-k="soft">軽打</button></div>
+<div class="row"><b>C</b><span>乾いた破裂（高い音と中くらいの音を重ねる・響きあり）</span><button data-s="C" data-k="hard">強打</button><button data-s="C" data-k="soft">軽打</button></div>
+<div class="row"><b>D</b><span>パンッ＋長めの響き（鋭く立ち上がって、すぐ落ちて、体育館に残る）</span><button data-s="D" data-k="hard">強打</button><button data-s="D" data-k="soft">軽打</button></div>
+<div class="row"><b>E</b><span>A と同じで響きなし</span><button data-s="E" data-k="hard">強打</button><button data-s="E" data-k="soft">軽打</button></div>
+<div class="row ref"><b>今</b><span>いまのゲームの音（参考：太鼓っぽい）</span><button data-s="NOW" data-k="hard">強打</button><button data-s="NOW" data-k="soft">軽打</button></div>
+<div class="row ref"><b>前</b><span>その前の音（参考：電気のパチッ）</span><button data-s="OLD" data-k="hard">強打</button><button data-s="OLD" data-k="soft">軽打</button></div>
+
+<script>
+"use strict";
+let ctx = null, out = null, noise = null;
+function init() {
+  if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+  const C = window.AudioContext || window.webkitAudioContext;
+  ctx = new C();
+  out = ctx.createGain(); out.gain.value = 0.6; out.connect(ctx.destination);
+  const len = ctx.sampleRate * 2, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  noise = buf;
+}
+
+// ざらついた音。q はフィルタの鋭さ（小さいほど広い音）、attack は立ち上がりの時間
+function nz(o) {
+  const t0 = ctx.currentTime + (o.delay || 0), s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  s.buffer = noise;
+  f.type = o.type; f.Q.value = o.q || 1;
+  f.frequency.setValueAtTime(o.from, t0);
+  f.frequency.exponentialRampToValueAtTime(Math.max(20, o.to), t0 + o.dur);
+  const at = o.attack || 0.002;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(o.vol, t0 + at);
+  if (o.tail) {                                           // 2 段で落ちる：すぐ半分以下に落ちて、少し残る
+    g.gain.exponentialRampToValueAtTime(o.vol * 0.18, t0 + at + o.dur * 0.25);
+  }
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);
+  s.connect(f); f.connect(g); g.connect(out);
+  s.start(t0, Math.random()); s.stop(t0 + o.dur + 0.05);
+}
+function tone(freq, to, dur, type, vol) {
+  const t0 = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t0);
+  o.frequency.exponentialRampToValueAtTime(Math.max(20, to), t0 + dur);
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  o.connect(g); g.connect(out); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+// 体育館の響き：同じ音を少し遅らせて、小さく、こもらせて重ねる
+function room(o, taps) {
+  nz(o);
+  for (const [dl, k] of taps || [[0.045, 0.28], [0.1, 0.14], [0.18, 0.07]]) {
+    nz(Object.assign({}, o, { delay: (o.delay || 0) + dl, vol: o.vol * k, from: o.from * 0.7, to: o.to * 0.7 }));
+  }
+}
+
+const SOUNDS = {
+  A: { hard: () => room({ dur: 0.08, vol: 1.0, type: 'bandpass', q: 0.6, from: 2000, to: 1000 }),
+       soft: () => room({ dur: 0.06, vol: 0.55, type: 'bandpass', q: 0.6, from: 1700, to: 900 }) },
+  B: { hard: () => { room({ dur: 0.1, vol: 1.0, type: 'bandpass', q: 0.5, from: 1200, to: 600 }); nz({ dur: 0.06, vol: 0.4, type: 'lowpass', from: 500, to: 200 }); },
+       soft: () => { room({ dur: 0.07, vol: 0.55, type: 'bandpass', q: 0.5, from: 1000, to: 550 }); nz({ dur: 0.05, vol: 0.2, type: 'lowpass', from: 450, to: 200 }); } },
+  C: { hard: () => { room({ dur: 0.04, vol: 0.7, type: 'bandpass', q: 0.7, from: 3000, to: 1500 }); room({ dur: 0.07, vol: 0.8, type: 'bandpass', q: 1, from: 800, to: 600 }); },
+       soft: () => { room({ dur: 0.03, vol: 0.4, type: 'bandpass', q: 0.7, from: 2600, to: 1400 }); room({ dur: 0.05, vol: 0.45, type: 'bandpass', q: 1, from: 750, to: 550 }); } },
+  D: { hard: () => room({ dur: 0.14, vol: 1.1, type: 'bandpass', q: 0.55, from: 1600, to: 900, attack: 0.001, tail: true },
+                        [[0.05, 0.3], [0.11, 0.2], [0.19, 0.12], [0.3, 0.06]]),
+       soft: () => room({ dur: 0.1, vol: 0.6, type: 'bandpass', q: 0.55, from: 1400, to: 800, attack: 0.001, tail: true },
+                        [[0.05, 0.3], [0.11, 0.2], [0.19, 0.12], [0.3, 0.06]]) },
+  E: { hard: () => nz({ dur: 0.08, vol: 1.0, type: 'bandpass', q: 0.6, from: 2000, to: 1000 }),
+       soft: () => nz({ dur: 0.06, vol: 0.55, type: 'bandpass', q: 0.6, from: 1700, to: 900 }) },
+  NOW: { hard: () => { nz({ dur: 0.09, vol: 1.0, type: 'bandpass', from: 1300, to: 600 }); tone(340, 210, 0.08, 'sine', 0.45); nz({ dur: 0.12, vol: 0.35, type: 'lowpass', from: 700, to: 250 }); },
+         soft: () => { nz({ dur: 0.06, vol: 0.6, type: 'bandpass', from: 1100, to: 650 }); tone(420, 290, 0.06, 'sine', 0.3); } },
+  OLD: { hard: () => { nz({ dur: 0.045, vol: 1.0, type: 'highpass', from: 1800, to: 1200 }); nz({ dur: 0.07, vol: 0.5, type: 'bandpass', from: 3200, to: 1800 }); },
+         soft: () => { nz({ dur: 0.03, vol: 0.55, type: 'highpass', from: 1400, to: 1000 }); nz({ dur: 0.04, vol: 0.25, type: 'bandpass', from: 2400, to: 1500 }); } },
+};
+
+for (const b of document.querySelectorAll('button')) {
+  b.addEventListener('click', () => { init(); SOUNDS[b.dataset.s][b.dataset.k](); });
+}
+</script>
+</body>
+</html>
