@@ -8,23 +8,37 @@ function newActor(id, team, x, z) {
 function dirOf(team) { return team === 0 ? 1 : -1; }      // 相手コートの向き（x の符号）
 function riseTime() { return Math.sqrt(2 * CFG.jumpH / CFG.gravity); }   // 踏み切ってから最高点まで
 
-// dt 進める。地上なら task.at（仕事が無ければ home）へ走る。jumpAt を過ぎたら跳ぶ
+// dt 進める。地上なら task.at（仕事が無ければ home）へ走る。jumpAt を過ぎたら跳ぶ。
+// アタックの助走（planApproach）があれば、approachStart までは手前で待ち、そこから踏み切り位置へ走って跳び、空中で前へ流れる
 function stepActor(a, dt, simT) {
   const t = a.task;
   if (a.y > 0) {
     a.vy -= CFG.gravity * dt;
     a.y += a.vy * dt;
-    if (a.y <= 0) { a.y = 0; a.vy = 0; }
+    a.x += a.dvx * dt; a.z += a.dvz * dt;
+    a.x = a.team === 0 ? Math.min(a.x, -0.35) : Math.max(a.x, 0.35);   // 空中でもネットは越えない
+    if (a.y <= 0) { a.y = 0; a.vy = 0; a.dvx = a.dvz = 0; a.landT = simT; }
   }
-  const g = t ? t.at : a.home;
+  let g = t ? t.at : a.home, speed = CFG.runSpeed;
+  if (t && t.approachSpot && !t.jumped) {
+    if (simT < t.approachStart) g = t.approachSpot;
+    else {
+      g = t.takeoff;
+      const left = Math.max(0.05, t.jumpAt - simT);
+      speed = Math.min(CFG.runSpeed * 1.2, Math.max(2, Math.hypot(g.x - a.x, g.z - a.z) / left));   // 踏み切りの時刻に着く速さ
+    }
+  }
   a.moving = false;
   if (a.stun > 0) a.stun = Math.max(0, a.stun - dt);
   const waiting = t && t.delay && simT < t.start + t.delay;   // 反応が遅れて、まだ動き出さない
   if (a.y === 0 && !waiting && !(a.stun > 0)) {
-    const dx = g.x - a.x, dz = g.z - a.z, d = Math.hypot(dx, dz), step = CFG.runSpeed * dt;
+    const dx = g.x - a.x, dz = g.z - a.z, d = Math.hypot(dx, dz), step = speed * dt;
     if (d > 0.02) {
       a.moving = true;
-      if (d <= step) { a.x = g.x; a.z = g.z; } else { a.x += dx / d * step; a.z += dz / d * step; }
+      a.mdx = dx / d; a.mdz = dz / d; a.moveLeft = d;
+      const moved = Math.min(d, step);
+      a.stride += moved;
+      if (d <= step) { a.x = g.x; a.z = g.z; } else { a.x += a.mdx * step; a.z += a.mdz * step; }
     }
   }
   if (t && t.jumpOnArrive && t.jumpAt == null && !a.moving) t.jumpAt = simT;
@@ -32,7 +46,19 @@ function stepActor(a, dt, simT) {
     t.jumped = true;
     a.vy = Math.sqrt(2 * CFG.gravity * CFG.jumpH);
     a.y = 1e-4;
+    if (t.approachSpot) {                                 // 助走の勢いで前へ流れ、最高点で打つ所の上に来る
+      const r = riseTime();
+      a.dvx = (t.at.x - a.x) / r; a.dvz = (t.at.z - a.z) / r;
+    }
   }
+}
+
+// アタックの助走を決める（t.at・t.jumpAt が決まったあとに呼ぶ）
+function planApproach(a) {
+  const t = a.task, M = CFG.motion, d = dirOf(a.team), G = CFG.gym;
+  t.takeoff = { x: t.at.x - d * M.broad, z: t.at.z };
+  t.approachSpot = { x: clamp(t.at.x - d * M.approachDist, -G.halfX + 0.5, G.halfX - 0.5), z: t.at.z };
+  t.approachStart = t.jumpAt - M.approachTime;
 }
 
 // 爆弾に触れたか。'hit' / 'miss' / null（まだ）

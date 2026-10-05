@@ -132,6 +132,7 @@ function aimTask(R, a) {
   t.pending = false;
   t.contactAt = R.simT + p.t;
   if (t.jump) t.jumpAt = t.contactAt - riseTime();
+  if (t.kind === 'attack') planApproach(a);              // アタックは助走して跳ぶ
 }
 function retarget(R, team) {
   for (const a of R.actors) if (a.team === team && a.task && a.task.pending && a.task.kind !== 'block') aimTask(R, a);

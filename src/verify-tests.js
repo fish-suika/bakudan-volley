@@ -730,6 +730,37 @@ test('facingFor：止まっている・近くへはネットのほう、遠く�
   near(facingFor(e), -Math.PI / 2, 1e-9);
 });
 
+test('助走：打つ所の手前で待ち、跳ぶ approachTime 秒前から走り、踏み切って前へ流れ、最高点で打つ所の上に来る', () => {
+  const a = newActor(0, 0, -5, 0);
+  const rise = riseTime();
+  a.task = { kind: 'attack', contact: true, jump: true, at: { x: -1.3, z: 0 }, contactAt: 3, jumpAt: 3 - rise, start: 0 };
+  planApproach(a);
+  near(a.task.approachSpot.x, -1.3 - CFG.motion.approachDist, 1e-9);
+  let simT = 0, atTakeoff = null, atPeak = null;
+  while (simT < 3.8) {
+    simT += 1 / 120;
+    stepActor(a, 1 / 120, simT);
+    if (atTakeoff === null && a.y > 0) atTakeoff = a.x;
+    if (atPeak === null && simT >= 3) atPeak = { x: a.x, y: a.y };
+    if (Math.abs(simT - (a.task.approachStart - 0.05)) < 1 / 240) near(a.x, a.task.approachSpot.x, 0.05, '助走の前は手前で待つ');
+  }
+  near(atTakeoff, -1.3 - CFG.motion.broad, 0.15, '踏み切り位置');
+  near(atPeak.x, -1.3, 0.12, '最高点で打つ所の上');
+  near(atPeak.y, CFG.jumpH, 0.05);
+  eq(a.y, 0);
+  eq(a.landT !== null && a.landT > 3, true, '着地の時刻');
+  eq(a.x <= -0.35, true, 'ネットを越えない');
+});
+
+test('stepActor：走った距離（stride）・向き（mdx, mdz）・残りの距離（moveLeft）を数える', () => {
+  const a = newActor(0, 0, -5, 0);
+  a.task = { at: { x: -5, z: 3 } };
+  stepFor(a, 0.2);
+  near(a.stride, CFG.runSpeed * 0.2, 0.02);
+  near(a.mdz, 1, 1e-9); near(a.mdx, 0, 1e-9);
+  near(a.moveLeft, 3 - CFG.runSpeed * 0.2 + CFG.runSpeed / 60, 0.15);
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');
