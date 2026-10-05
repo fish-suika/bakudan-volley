@@ -18,10 +18,17 @@
   #actions{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:6;
     display:flex;flex-wrap:wrap;gap:8px 10px;width:min(640px,calc(100vw - 32px));opacity:.35;transition:opacity .15s;pointer-events:none}
   #actions.on{opacity:1;pointer-events:auto}
-  #actions button{flex:1 1 0;min-width:0;padding:10px 4px;border:2px solid rgba(255,255,255,.55);border-radius:12px;
-    background:rgba(20,24,30,.72);color:#fff;font:700 clamp(14px,2.6vw,18px) var(--jp);letter-spacing:.06em;cursor:pointer;touch-action:manipulation}
+  #actions button{flex:1 1 0;min-width:0;padding:8px 4px;border:2px solid rgba(255,255,255,.55);border-radius:12px;
+    background:rgba(20,24,30,.72);color:#fff;font:700 clamp(14px,2.6vw,18px) var(--jp);letter-spacing:.06em;cursor:pointer;touch-action:manipulation;
+    position:relative;display:flex;align-items:center;justify-content:center;gap:6px}
   #actions.on button{border-color:#ffd04a;background:rgba(60,44,10,.85)}
-  #actions button b{display:block;font-size:11px;font-weight:400;opacity:.7}
+  #actions button b{position:absolute;left:7px;top:3px;font-size:11px;font-weight:400;opacity:.7}
+  /* ピクトグラム（どんな動きか一目で分かる絵。白い棒人間と、小さな爆弾） */
+  #actions button svg{width:clamp(26px,4vw,34px);height:clamp(26px,4vw,34px);flex:none;fill:none;stroke:currentColor;stroke-width:3.4;
+    stroke-linecap:round;stroke-linejoin:round}
+  #actions button svg .f{fill:currentColor;stroke:none}
+  #actions button svg .s{fill:#ffd04a;stroke:none}
+  #actions button svg .t{stroke-width:2.2;opacity:.7}
   #actions button:active{transform:scale(.96)}
   #timer{flex:0 0 100%;height:5px;background:rgba(255,255,255,.18);border-radius:3px;overflow:hidden}
   #timer i{display:block;height:100%;width:0;background:#ffd04a}
@@ -95,10 +102,27 @@
 <div id="hint">スローになったら 1〜4 キー（スマホはボタン）で次の行動を選ぶ</div>
 <div id="scene"><span id="sceneText"></span><b id="count"></b></div>
 <div id="actions">
-  <button data-act="receive"><b>1</b>レシーブ</button>
-  <button data-act="attack"><b>2</b>アタック</button>
-  <button data-act="block"><b>3</b>ブロック</button>
-  <button data-act="serve"><b>4</b>サーブ</button>
+  <button data-act="receive"><b>1</b>
+    <svg viewBox="0 0 48 48" aria-hidden="true"><!-- 腰を落とし、組んだ腕で爆弾を上げる -->
+      <circle class="f" cx="20" cy="12" r="4.6"/><path d="M20 17 L16 28 M19 19 L32 26 M16 28 L25 33 L24 44 M16 28 L11 36 L8 44"/>
+      <circle class="f" cx="35" cy="17" r="4.4"/><path class="t" d="M37.5 13 L39.5 9.5"/><circle class="s" cx="40.5" cy="8" r="1.8"/>
+    </svg>レシーブ</button>
+  <button data-act="attack"><b>2</b>
+    <svg viewBox="0 0 48 48" aria-hidden="true"><!-- 跳んで、振り上げた腕で爆弾を叩き込む -->
+      <circle class="f" cx="18" cy="13" r="4.6"/><path d="M18 18 L15 29 M18 20 L30 10 M18 20 L9 23 M15 29 L10 34 L4 35 M15 29 L15 36 L9 40"/>
+      <circle class="f" cx="35" cy="7" r="4.4"/><path class="t" d="M38 14 L44 25 M34 15 L38 23 M4 46 L24 46"/>
+    </svg>アタック</button>
+  <button data-act="block"><b>3</b>
+    <svg viewBox="0 0 48 48" aria-hidden="true"><!-- ネット際で両腕を上へ伸ばして跳ぶ -->
+      <circle class="f" cx="18" cy="15" r="4.6"/><path d="M18 20 L17 32 M18 22 L23 6 M18 22 L27 8 M17 32 L15 42 M17 32 L20 42"/>
+      <path class="t" d="M31 20 L46 20 M32 20 L32 46 M32 26 L46 26 M32 32 L46 32 M37 20 L37 34 M42 20 L42 34"/>
+      <circle class="f" cx="38" cy="10" r="4.2"/><path class="t" d="M41 4 L45 1"/>
+    </svg>ブロック</button>
+  <button data-act="serve"><b>4</b>
+    <svg viewBox="0 0 48 48" aria-hidden="true"><!-- 爆弾を高く上げ、腕を振りかぶって踏み込む -->
+      <circle class="f" cx="20" cy="15" r="4.6"/><path d="M20 20 L20 31 M20 22 L26 10 M20 22 L13 18 L15 11 M20 31 L26 37 L28 44 M20 31 L15 38 L12 44"/>
+      <circle class="f" cx="29" cy="6" r="4.2"/><path class="t" d="M4 30 L9 30 M3 36 L8 36"/>
+    </svg>サーブ</button>
   <div id="timer"><i></i></div>
 </div>
 <div id="score"><span class="t0">味方</span><b id="s0">0</b><span>-</span><b id="s1">0</b><span class="t1">相手</span></div>
