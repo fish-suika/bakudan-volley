@@ -36,7 +36,7 @@
     const dt = Math.min(clock.getDelta(), 1 / 30);
     tickRally(R, dt);
     for (const e of R.events) {
-      if (e.type === 'choose') showChoice(e.scene, e.attack);
+      if (e.type === 'choose') showChoice(e.scene, e.attack, e.allowed);
       else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
       else if (e.type === 'explode') {
         spawnExplosion(e.x, e.z);

@@ -255,14 +255,26 @@ test('① 時間切れなら自動でサーブする', () => {
   eq(R.me.task && R.me.task.kind, 'serve');
 });
 
-test('① ブロックを選ぶと、爆弾を持ったままネット際で跳んで戻り、もう一度選ぶ', () => {
+test('① ブロックは押せない（選択が続き、爆弾も持ったまま）', () => {
   const R = newRally(zero);
   startPoint(R, 0);
   choose(R, 'block');
-  const ev = runUntilChoose(R, 6);
-  eq(ev.some(e => e.type === 'choose' && e.scene === 'serve'), true);
+  eq(R.state, 'choose');
   eq(R.ball.held === R.me, true);
-  eq(ev.some(e => e.type === 'explode'), false);
+  eq(R.choose.allowed, ['receive', 'attack', 'serve']);
+});
+
+test('相手のサーブではブロックとアタックが押せず、相手のアタックでは 4 つとも押せる', () => {
+  const R = newRally(zero);
+  startPoint(R, 1);
+  runUntilChoose(R, 4);
+  eq(R.choose.allowed, ['receive', 'serve']);
+  choose(R, 'block'); eq(R.state, 'choose');
+  choose(R, 'attack'); eq(R.state, 'choose');
+  const R2 = newRally(zero);
+  R2.openerIdx = 1;
+  startPoint(R2, 1);
+  eq(R2.choose.allowed.length, 4);
 });
 
 test('敵のサーブを打たれた瞬間に ②（アタックではない）の選択になる', () => {

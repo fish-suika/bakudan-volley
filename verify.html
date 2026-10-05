@@ -285,10 +285,17 @@ function enemyAttackOpener(R) {
   afterHit(R, setter, { kind: 'toss', ok: true });
 }
 
-function openChoice(R, scene, attack) {
+// その場面で選べる行動（ルール上ありえないものは押せない）
+function allowedActions(scene, serve) {
+  if (scene === 'serve') return ['receive', 'attack', 'serve'];      // サーブ番にブロックはできない
+  if (scene === 'incoming' && serve) return ['receive', 'serve'];   // 相手のサーブはブロックもアタックもできない
+  return ACTIONS.slice();
+}
+
+function openChoice(R, scene, attack, serve) {
   R.state = 'choose';
-  R.choose = { scene, attack: !!attack, left: CFG.choiceTime };
-  R.events.push({ type: 'choose', scene, attack: !!attack });
+  R.choose = { scene, attack: !!attack, left: CFG.choiceTime, allowed: allowedActions(scene, serve) };
+  R.events.push({ type: 'choose', scene, attack: !!attack, allowed: R.choose.allowed });
 }
 
 // 爆弾がそのまま落ちると team の側か
@@ -350,12 +357,12 @@ function giveNoop(R, a, kind, then) {
 // プレイヤーが選んだ（action が null なら時間切れ）
 function choose(R, action) {
   if (R.state !== 'choose') return;
+  if (action !== null && !R.choose.allowed.includes(action)) return;   // 押せない行動：選択は続く
   const sc = R.choose.scene, attack = R.choose.attack, me = R.me, mate = R.mate, P = CFG.success, b = R.ball;
   R.choose = null; R.state = 'play';
   R.events.push({ type: 'chosen', action, scene: sc });
   if (sc === 'serve') {
     if (action === 'serve' || action === null) giveServe(R, me, roll(R, P.serve.serve));
-    else if (action === 'block') giveNoop(R, me, 'blockNoop', () => openChoice(R, 'serve'));
     else {                                                // その場で爆弾を放り上げ、レシーブかアタックで打つ
       const d = dirOf(me.team);
       b.held = null;
@@ -435,7 +442,7 @@ function afterHit(R, a, t) {
   }
   if (!headingTo(R, a.team)) {
     retarget(R, 1 - a.team);
-    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false);
+    if (a.team === 1 && !R.awaiting && R.state !== 'choose') openChoice(R, 'incoming', false, t.kind === 'serve');
   }
 }
 
@@ -750,14 +757,26 @@ test('① 時間切れなら自動でサーブする', () => {
   eq(R.me.task && R.me.task.kind, 'serve');
 });
 
-test('① ブロックを選ぶと、爆弾を持ったままネット際で跳んで戻り、もう一度選ぶ', () => {
+test('① ブロックは押せない（選択が続き、爆弾も持ったまま）', () => {
   const R = newRally(zero);
   startPoint(R, 0);
   choose(R, 'block');
-  const ev = runUntilChoose(R, 6);
-  eq(ev.some(e => e.type === 'choose' && e.scene === 'serve'), true);
+  eq(R.state, 'choose');
   eq(R.ball.held === R.me, true);
-  eq(ev.some(e => e.type === 'explode'), false);
+  eq(R.choose.allowed, ['receive', 'attack', 'serve']);
+});
+
+test('相手のサーブではブロックとアタックが押せず、相手のアタックでは 4 つとも押せる', () => {
+  const R = newRally(zero);
+  startPoint(R, 1);
+  runUntilChoose(R, 4);
+  eq(R.choose.allowed, ['receive', 'serve']);
+  choose(R, 'block'); eq(R.state, 'choose');
+  choose(R, 'attack'); eq(R.state, 'choose');
+  const R2 = newRally(zero);
+  R2.openerIdx = 1;
+  startPoint(R2, 1);
+  eq(R2.choose.allowed.length, 4);
 });
 
 test('敵のサーブを打たれた瞬間に ②（アタックではない）の選択になる', () => {
