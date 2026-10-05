@@ -100,6 +100,31 @@ test('コートの外の床でも爆発する。どちら側かは x の符号�
   eq([inCourt(-8.9, 4.4), inCourt(-9.1, 0), inCourt(0, 4.6)], [true, false, false]);
 });
 
+// ===== 打ち出し =====
+test('shotVelocity: 右から打つと、狙った左の地点で床に触れる', () => {
+  const from = { x: 7, y: 2.6, z: 0 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = shotVelocity(from, { x: -5, z: 2 }, 7);
+  const h = run(b, 10);
+  eq(h && h.side, 0);
+  near(h.x, -5, 0.05, 'x'); near(h.z, 2, 0.05, 'z');
+});
+
+test('shotVelocity: 左から低めの最高点で打っても、ネットを越えて右の地点に落ちる', () => {
+  const from = { x: -7, y: 2.6, z: 0 };
+  const b = newBall(from.x, from.y, from.z);
+  b.vel = shotVelocity(from, { x: 6, z: -3 }, 5);
+  const h = run(b, 10);
+  eq(h && h.side, 1);
+  near(h.x, 6, 0.05, 'x'); near(h.z, -3, 0.05, 'z');
+});
+
+test('shotVelocity: 最高点が打つ高さより低くても壊れない（真上に上がらず、すぐ落ちる）', () => {
+  const v = shotVelocity({ x: -2, y: 3, z: 0 }, { x: -4, z: 0 }, 1);
+  eq(Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z), true);
+  eq(v.x < 0, true);
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');
