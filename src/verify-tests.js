@@ -201,6 +201,16 @@ test('checkContact: 降りてきた爆弾が高さ h・手の届く距離なら 
   eq(checkContact(a, b), null, '行き先が決まる前は触らない');
 });
 
+test('ブロックは手の範囲に触れたときだけ止める', () => {
+  const a = newActor(0, 0, -0.5, 0);
+  a.y = 0.9;
+  a.task = { kind: 'block', contact: true, ok: false, at: { x: -0.5, z: 0 } };
+  const b = newBall(-0.35, 2.9, 0);
+  eq(checkContact(a, b), 'hit', '手の位置');
+  b.pos = { x: -0.35, y: 2.9, z: 1.3 }; eq(checkContact(a, b), null, '横に外れた');
+  b.pos = { x: -0.35, y: 3.8, z: 0 }; eq(checkContact(a, b), null, '手より上');
+});
+
 // ===== ラリー =====
 const zero = () => 0;
 function runFor(R, sec) {

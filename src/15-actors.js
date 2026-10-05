@@ -37,8 +37,12 @@ function checkContact(a, ball) {
   const t = a.task;
   if (!t || !t.contact || t.pending || !ball.live || ball.held) return null;
   const p = ball.pos;
-  if (t.kind === 'block') {                               // ネットの上で、空中の手に当たれば止める
-    if (t.ok && a.y > 0.3 && Math.abs(p.x) < 0.7 && Math.abs(p.z - a.z) < 0.9 && p.y > 2.2 && p.y < 2.5 + CFG.jumpH + 0.6) return 'hit';
+  if (t.kind === 'block') {                               // 手の範囲（ネット側へ 0.15m、肩幅＋腕 ±0.45m、跳んだ高さ＋1.8〜2.3m）に触れたら止める
+    const hx = a.x + dirOf(a.team) * 0.15, r = CFG.ball.r;
+    const dx = Math.max(Math.abs(p.x - hx) - 0.12, 0);
+    const dz = Math.max(Math.abs(p.z - a.z) - 0.45, 0);
+    const dy = Math.max(a.y + 1.8 - p.y, p.y - (a.y + 2.3), 0);
+    if (a.y > 0.1 && dx * dx + dy * dy + dz * dz <= r * r) return 'hit';
     if (p.x * dirOf(a.team) < -1.0) return 'miss';        // 自陣の奥へ抜けた
     return null;
   }

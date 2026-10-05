@@ -144,6 +144,20 @@ function choose(R, action) {
   else giveReturn(R, mate, roll(R, CFG.ai.receive));      // 時間切れ：味方が返す
 }
 
+// 相手がブロックに跳んでいれば、そのブロックの成否に合わせてコースを決める：
+// 成功（ok）なら手のある線へ打ち込む（＝手に当たって止まる）、失敗なら手の横 1.4m を抜く線にする
+function spikeTarget(R, a, from, to) {
+  const blk = R.actors.find(o => o.team !== a.team && o.task && o.task.kind === 'block');
+  if (!blk) return to;
+  const bx = blk.task.at.x + dirOf(blk.team) * 0.15;
+  const bz = blk.task.at.z + (blk.task.ok ? 0 : (R.rand() < 0.5 ? -1.4 : 1.4));
+  const W = CFG.court.halfWid - 0.3, dz = bz - from.z;
+  let k = (to.x - from.x) / (bx - from.x);                // 手の位置を通る線を、床まで延ばす
+  if (Math.abs(dz) > 1e-6) k = Math.min(k, (Math.sign(dz) * W - from.z) / dz);   // コートの横からはみ出さない所まで
+  k = Math.max(k, 1.5);
+  return { x: from.x + (bx - from.x) * k, z: from.z + dz * k };
+}
+
 // 打った球の初速。成功なら狙いどおり、失敗なら笑える方向へ
 function shotFor(R, a, t) {
   const d = dirOf(a.team), p = R.ball.pos, rnd = R.rand, S = CFG.shots, W = CFG.court.halfWid - 0.7;
@@ -157,7 +171,7 @@ function shotFor(R, a, t) {
       return t.ok ? shotVelocity(from, { x: -d * S.set.toX, z: clamp(t.target.z, -3.5, 3.5) }, S.set.apex)
                   : shotVelocity(from, { x: -d * 0.3, z: p.z }, from.y + 0.8);          // 低いトスでネット際に落ちる
     case 'attack': case 'direct': case 'standSpike':
-      return t.ok ? spikeVelocity(from, opp(4.5, 8.5), S.spikeSpeed) : intoNet();
+      return t.ok ? spikeVelocity(from, spikeTarget(R, a, from, opp(4.5, 8.5)), S.spikeSpeed) : intoNet();
     case 'block': return spikeVelocity(from, opp(1.5, 4), 10);
     case 'return': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shank();
     case 'bump': return t.ok ? shotVelocity(from, opp(5, 8.5), S.returnApex) : shotVelocity(from, { x: p.x - d * 0.6, z: p.z + 0.4 }, from.y + 1.2);   // 足元に落とす
