@@ -96,8 +96,8 @@ function endPoint(R, loser) {
     R.events.push({ type: 'gameover', winner: scorer, score: R.score.slice() });
     return;
   }
-  R.state = 'reset'; R.resetT = 0; R.nextServe = loser;   // 取られた側がサーブ
-  const s = serverOf(R, loser);
+  R.state = 'reset'; R.resetT = 0; R.nextServe = scorer;   // 点を取った側がサーブ（本人の要望、2026-10-05）
+  const s = serverOf(R, scorer);
   s.home = serveSpotOf(s);
 }
 

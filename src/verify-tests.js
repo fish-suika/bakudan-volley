@@ -420,7 +420,7 @@ test('敵がトスを上げた瞬間に ②（アタックが来る）の選択�
 });
 
 // ===== 点数と勝敗 =====
-test('爆発してしばらくすると点が入り、全員が歩いて定位置へ戻ってから、取られた側がサーブする', () => {
+test('爆発してしばらくすると点が入り、全員が歩いて定位置へ戻ってから、点を取った側がサーブする', () => {
   const R = quietRally();
   startPoint(R, 0);
   choose(R, 'serve');
@@ -429,7 +429,18 @@ test('爆発してしばらくすると点が入り、全員が歩いて定位�
   eq(p && [p.scorer, p.score], [0, [1, 0]]);
   eq(R.score, [1, 0]);
   const ev2 = runUntilChoose(R, 8);
-  eq(ev2.some(e => e.type === 'hit' && e.kind === 'serve' && e.actor.team === 1), true, '敵がサーブ');
+  eq(R.choose && R.choose.scene, 'serve', '点を取った自分たちがサーブ');
+  eq(R.ball.held === R.me, true);
+  near(R.me.x, -CFG.serveSpot, 0.05, 'サーブの位置');
+});
+
+test('相手に点を取られたら、相手がサーブする', () => {
+  const R = quietRally();
+  startPoint(R, 0);
+  onFloor(R, { x: -4, z: 0, side: 0 });
+  runUntil(R, 'point', CFG.explodeDelay + CFG.afterBoom + CFG.blast.maxTime);
+  const ev = runUntilChoose(R, 10);
+  eq(ev.some(e => e.type === 'hit' && e.kind === 'serve' && e.actor.team === 1), true, '敵がサーブ');
   eq(R.choose && R.choose.scene, 'incoming');
 });
 

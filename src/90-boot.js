@@ -69,9 +69,21 @@
     if (!replay.fired && replay.t >= b.t) { replay.fired = true; spawnExplosion(b.x, b.z); FX.freeze = 0; sndBoom(); }
     updateFx(dt * P.speed);
     camera.fov = P.fov; camera.updateProjectionMatrix();
-    const sx = b.x < 0 ? 1 : -1;                          // 爆心よりネット寄りの、低い所から
-    camera.position.set(b.x + sx * 5.5, 1.6, b.z + 7);
-    camera.lookAt(b.x, 2.2, b.z);
+    // 爆心と、吹っ飛んだ側の選手の両方が入るように見る（爆弾がコートの外に落ちると、爆心だけを見ていたら選手が映らなかった）
+    const f = frameAt(rec, replay.t), side = R.actors.map((a, i) => a.team === b.side ? f.players[i].p : null).filter(Boolean);
+    const pts = [[b.x, 1.0, b.z], ...side];
+    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length, cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+    const cz = pts.reduce((s, p) => s + p[2], 0) / pts.length;
+    const spread = Math.max(...pts.map(p => Math.hypot(p[0] - cx, (p[1] - cy) * 1.5, p[2] - cz)));
+    const dist = clamp(spread * 1.9 + 4, 7, 16);           // 広がっているほど引く
+    const goal = { x: clamp(cx + (cx < 0 ? 1 : -1) * dist * 0.35, -13.5, 13.5), y: 1.4 + dist * 0.12, z: Math.min(cz + dist, 16),
+      lx: cx, ly: Math.max(1.6, cy + 0.6), lz: cz };
+    const k = replay.cam ? Math.min(1, dt * 4) : 1;       // 最初の 1 回はそのまま、あとはなめらかに追う
+    replay.cam = replay.cam || {};
+    for (const key in goal) replay.cam[key] = replay.cam[key] === undefined ? goal[key] : replay.cam[key] + (goal[key] - replay.cam[key]) * k;
+    const c = replay.cam;
+    camera.position.set(c.x, c.y, c.z);
+    camera.lookAt(c.lx, c.ly, c.lz);
     if (replay.t >= replay.end) endReplay();
   }
   // タイトル中の試合：プレイヤーの番も、少し待ってから場面に合う行動を自動で選ぶ
