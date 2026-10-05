@@ -10,6 +10,7 @@
   const scene = new THREE.Scene();
   buildGym(scene);
   initFx(scene);
+  initDecals(scene);
   const camera = new THREE.PerspectiveCamera(CFG.camera.fov, innerWidth / innerHeight, 0.1, 200);
   CAM.cam = camera;
 
@@ -33,6 +34,7 @@
 
   document.getElementById('againBtn').addEventListener('click', () => {
     hideResult();
+    clearDecals();
     newGame(R);
     setScore(R.score);
   });
@@ -59,6 +61,7 @@
       }
       else if (e.type === 'gameover') showResult(e.winner, e.score);
       else if (e.type === 'bump') showToast('ゴツン！', 0.8);
+      else if (e.type === 'stick') addDecal(e);
       else if (e.type === 'crash') { FX.shake = Math.min(1.2, FX.shake + 0.35); sndCrash(); }   // 壁・天井に激突
       else if (e.type === 'hit') sndHit(e.kind);
       else if (e.type === 'land' || e.type === 'net') sndLand();
