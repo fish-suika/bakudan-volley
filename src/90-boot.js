@@ -21,6 +21,8 @@
   });
   const bombMesh = makeBombMesh(scene);
   initInput(act => choose(R, act));
+  addEventListener('pointerdown', sndInit);
+  addEventListener('keydown', sndInit);
   window.GAME = { R, choose: act => choose(R, act) };     // 確認用
 
   addEventListener('resize', () => {
@@ -42,19 +44,24 @@
     if (FX.freeze > 0) { FX.freeze -= dt; renderer.render(scene, camera); return; }   // 爆発の瞬間の一瞬の静止
     tickRally(R, dt);
     for (const e of R.events) {
-      if (e.type === 'choose') showChoice(e.scene, e.attack);
+      if (e.type === 'choose') { showChoice(e.scene, e.attack); sndSlow(); }
       else if (e.type === 'chosen') { hideChoice(); if (e.action === null) showToast('時間切れ！', 1.0); }
       else if (e.type === 'explode') {
+        sndBoom();
         spawnExplosion(e.x, e.z);
         showToast(e.side === 0 ? '味方コートで爆発！' : '相手コートで爆発！');
       }
       else if (e.type === 'point') {
+        sndWhistle();
         setScore(e.score);
         if (e.score[e.scorer] < CFG.winScore) showToast(e.scorer === 0 ? '味方に 1 点！' : '相手に 1 点……', 1.4);   // 最後の 1 点は勝敗の画面に任せる
       }
       else if (e.type === 'gameover') showResult(e.winner, e.score);
       else if (e.type === 'bump') showToast('ゴツン！', 0.8);
-      else if (e.type === 'crash') FX.shake = Math.min(1.2, FX.shake + 0.35);   // 壁・天井に激突
+      else if (e.type === 'crash') { FX.shake = Math.min(1.2, FX.shake + 0.35); sndCrash(); }   // 壁・天井に激突
+      else if (e.type === 'hit') sndHit(e.kind);
+      else if (e.type === 'land' || e.type === 'net') sndLand();
+      else if (e.type === 'collide') sndCrash();
     }
     R.events.length = 0;
     if (R.state === 'choose') setTimer(R.choose.left / CFG.choiceTime);
