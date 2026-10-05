@@ -11,12 +11,15 @@ cat src/00-head.html \
     src/16-rally.js \
     src/20-blast.js \
     src/22-sound.js \
+    src/24-commentary.js \
     src/30-gym.js \
     src/40-player.js \
     src/41-bomb.js \
     src/42-motions.js \
     src/44-explosion-fx.js \
     src/45-camera.js \
+    src/46-replay.js \
+    src/47-decals.js \
     src/50-input.js \
     src/60-hud.js \
     src/90-boot.js \
@@ -32,7 +35,9 @@ cat src/verify-head.html \
     src/15-actors.js \
     src/16-rally.js \
     src/20-blast.js \
+    src/24-commentary.js \
     src/42-motions.js \
+    src/46-replay.js \
     src/verify-tests.js \
     src/99-tail.html > verify.html
 

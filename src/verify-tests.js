@@ -791,6 +791,65 @@ test('壁に張り付いたら stick（どの壁か）、起き上がったら g
   eq(R.events.some(e => e.type === 'getup' && e.actor === a), true);
 });
 
+// ===== 実況 =====
+test('実況：出来事の種類で文を選ぶ（爆発はどちらのコートか、天井、壁、起き上がり）', () => {
+  const C = { until: 0, prio: -1, last: '' };
+  eq(COMMENT_LINES.explodeThem.includes(pickComment(C, { type: 'explode', side: 1 }, 0, zero)), true);
+  const C2 = { until: 0, prio: -1, last: '' };
+  eq(COMMENT_LINES.explodeUs.includes(pickComment(C2, { type: 'explode', side: 0 }, 0, zero)), true);
+  eq(commentKey({ type: 'crash', y: CFG.gym.ceil - 0.45 }), 'ceiling');
+  eq(commentKey({ type: 'crash', y: 3 }), null, '壁への激突は stick で言う');
+  eq(commentKey({ type: 'hit', kind: 'receive', ok: false }), null, '弾いたレシーブはほめない');
+  eq(commentKey({ type: 'hit', kind: 'attack', ok: true }), 'attack');
+  eq(commentKey({ type: 'getup' }), 'getup');
+});
+
+test('実況：出している間（hold 秒）は、より大事な出来事だけ差し替える', () => {
+  const C = { until: 0, prio: -1, last: '' };
+  eq(!!pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 0, zero), true);
+  eq(pickComment(C, { type: 'hit', kind: 'toss', ok: true }, 0.5, zero), null, '同じか低い優先度は出さない');
+  eq(!!pickComment(C, { type: 'explode', side: 1 }, 0.6, zero), true, '爆発は差し替える');
+  eq(!!pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 0.6 + CFG.comment.hold + 0.01, zero), true, '時間がたてば出す');
+});
+
+test('実況：同じ文を続けて出さない', () => {
+  const C = { until: 0, prio: -1, last: '' };
+  const a = pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 0, zero);
+  const b = pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 10, zero);
+  eq(a !== b, true);
+});
+
+// ===== リプレイ =====
+function fakePlayer(x) {                                   // 記録に使う項目だけを持つ選手の見た目
+  const j = {};
+  for (const n of JOINTS) j[n] = { rotation: { x: 0, y: 0, z: 0 }, position: { y: 0 } };
+  return { root: { position: { x, y: 0, z: 0 }, rotation: { y: 0 } }, tumble: { rotation: { x: 0, z: 0 } }, j };
+}
+function fakeBomb() { return { g: { visible: true, position: { x: 1, y: 2, z: 3 } }, shadow: { visible: true, position: { x: 0, y: 0, z: 0 } } }; }
+
+test('リプレイ：記録は keep 秒より古いものを捨て、frameAt はその時刻以前で一番新しいフレームを返す', () => {
+  const rec = makeRecorder(), pl = fakePlayer(0), bomb = fakeBomb();
+  for (let i = 0; i <= 100; i++) { pl.root.position.x = i; recordFrame(rec, i * 0.1, [pl], bomb, 5); }
+  eq(rec.frames[0].t >= 10 - 5 - 1e-9, true, '古いものは捨てる');
+  eq(frameAt(rec, 7.25).players[0].p[0], 72);
+  eq(frameAt(rec, 0).players[0].p[0], rec.frames[0].players[0].p[0], '範囲より前は最初');
+  eq(frameAt(rec, 99).players[0].p[0], 100, '範囲より後は最後');
+});
+
+test('リプレイ：applyFrame で、記録した位置・回転・関節・爆弾を当て直す', () => {
+  const rec = makeRecorder(), pl = fakePlayer(0), bomb = fakeBomb();
+  pl.root.position.x = 3; pl.root.rotation.y = 1; pl.tumble.rotation.x = 2; pl.j.kneeL.rotation.x = 1.5; pl.j.hips.position.y = 0.8;
+  recordFrame(rec, 0, [pl], bomb, 5);
+  bomb.g.visible = false;
+  recordFrame(rec, 1, [pl], bomb, 5);
+  const target = fakePlayer(0), b2 = fakeBomb();
+  applyFrame(frameAt(rec, 0), [target], b2);
+  eq([target.root.position.x, target.root.rotation.y, target.tumble.rotation.x, target.j.kneeL.rotation.x, target.j.hips.position.y], [3, 1, 2, 1.5, 0.8]);
+  eq([b2.g.visible, b2.g.position.x], [true, 1]);
+  applyFrame(frameAt(rec, 1), [target], b2);
+  eq([b2.g.visible, b2.shadow.visible], [false, false]);
+});
+
 // ===== 結果表示 =====
 (function () {
   const out = document.getElementById('out');

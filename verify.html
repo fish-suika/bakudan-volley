@@ -93,6 +93,9 @@ const CFG = {
     strideLen: 1.5,                                       // 走るとき脚が一回りする距離 m
     shuffleDist: 2.5,                                     // これより近い所へはサイドステップ（ネットを向いたまま）
   },
+  // ---- Phase 5：演出 ----
+  comment: { hold: 2.2 },                                 // 実況の文を出しておく秒数（この間は、より大事な出来事だけ差し替える）
+  replay: { before: 0.5, after: 2.0, speed: 0.5, keep: 8, fov: 50 },   // 爆発の何秒前から何秒後まで、何倍の速さで。記録は 8 秒ぶん
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25, boomFov: 58, boomLookY: 3.3 },   // 爆発の間は画角を広げて、天井・横の壁・倒れた人まで入れる
 };
 // ===== 爆弾の物理（three.js 非依存） =====
@@ -819,6 +822,55 @@ function collideFlyers(R) {
     R.events.push({ type: 'collide', a, b });
   }
 }
+// ===== 実況テロップ（three.js 非依存） =====
+// 爆弾が爆発しても、実況はあくまで真面目に。出来事の種類から文を選ぶ
+const COMMENT_LINES = {
+  serve: ['サーブです', '静かにサーブの構えに入りました', 'さあ、注目のサーブ'],
+  receive: ['見事なレシーブ！', 'きれいに上げました', '落ち着いて拾いました'],
+  toss: ['いいトスです', 'セッター、冷静です'],
+  attack: ['強烈なスパイク！', '打ち込んだ！', '鋭い！'],
+  block: ['ブロック！ 止めました！', '高い壁です！'],
+  miss: ['あーっと、空振り！', '触れません！'],
+  bump: ['おっと、ぶつかった！', 'お見合い……ではなく、衝突です'],
+  explodeUs: ['あーっと、自陣で爆発！', 'これは痛い！'],
+  explodeThem: ['決まったー！ 相手コートで爆発！', '相手コート、爆発です！'],
+  ceiling: ['天井まで飛んだ！', '天井に届きました'],
+  stick: ['壁に、張り付いています', 'これは見事な大の字'],
+  net: ['ネットに引っかかっています', 'ネットにぶら下がっています'],
+  getup: ['何事もなかったかのように起き上がります', '平然と立ち上がりました', '試合は続きます'],
+  gameover: ['試合終了！', 'ここで試合終了です'],
+};
+// 優先度：出している間は、これより大きいものだけ差し替える
+const COMMENT_PRIO = { serve: 0, toss: 0, receive: 1, attack: 1, miss: 1, getup: 1, block: 2, bump: 2, ceiling: 2, stick: 2, net: 2,
+  explodeUs: 3, explodeThem: 3, gameover: 3 };
+
+// 出来事 → 実況の種類（言わないものは null）
+function commentKey(e) {
+  if (e.type === 'hit') {
+    if (e.kind === 'serve') return 'serve';
+    if (e.kind === 'toss') return 'toss';
+    if (e.kind === 'block') return 'block';
+    if (['attack', 'direct', 'standSpike'].includes(e.kind)) return e.ok ? 'attack' : null;
+    if (['receive', 'return', 'bump'].includes(e.kind)) return e.ok ? 'receive' : null;
+    return null;
+  }
+  if (e.type === 'explode') return e.side === 0 ? 'explodeUs' : 'explodeThem';
+  if (e.type === 'crash') return e.y > CFG.gym.ceil - 1 ? 'ceiling' : null;
+  if (['miss', 'bump', 'stick', 'net', 'getup', 'gameover'].includes(e.type)) return e.type;
+  return null;
+}
+
+// C = { until, prio, last }（出している文の状態）。now は実時間。出すなら文、出さないなら null
+function pickComment(C, e, now, rand) {
+  const key = commentKey(e);
+  if (!key) return null;
+  const prio = COMMENT_PRIO[key];
+  if (now < C.until && prio <= C.prio) return null;
+  const lines = COMMENT_LINES[key].filter(s => s !== C.last);   // 同じ文は続けない
+  const text = lines[Math.floor((rand || Math.random)() * lines.length)];
+  C.until = now + CFG.comment.hold; C.prio = prio; C.last = text;
+  return text;
+}
 // ===== ポーズ（関節の角度、ラジアン） =====
 const JOINTS = ['hips', 'spine', 'neck', 'head', 'shoulderL', 'elbowL', 'shoulderR', 'elbowR', 'hipL', 'kneeL', 'hipR', 'kneeR'];
 // 腕・太ももは rx が負で前へ振る。spine の rx が正で前かがみ。膝・肘は rx で曲げる
@@ -1158,6 +1210,54 @@ function flyPose(f, simT) {
   if (f.state === 'stick') return POSES.splat;
   if (f.state === 'getup') return f.t < CFG.blast.getupTime * 0.5 ? POSES.lie : POSES.ready;
   return POSES.lie;
+}
+// ===== 爆発のリプレイ（記録と当て直し。three.js の物は作らない） =====
+// 毎フレーム、選手と爆弾の見た目（位置・回転・関節）を記録しておき、点が入ったら爆発の前後をスローで見せ直す
+function makeRecorder() { return { frames: [] }; }
+
+// t は実時間。keep 秒より古いフレームは捨てる
+function recordFrame(rec, t, players, bomb, keep) {
+  rec.frames.push({
+    t,
+    players: players.map(pl => ({
+      p: [pl.root.position.x, pl.root.position.y, pl.root.position.z],
+      ry: pl.root.rotation.y,
+      tr: [pl.tumble.rotation.x, pl.tumble.rotation.z],
+      hy: pl.j.hips.position.y,
+      j: JOINTS.map(n => [pl.j[n].rotation.x, pl.j[n].rotation.y, pl.j[n].rotation.z]),
+    })),
+    ball: bomb.g.visible ? [bomb.g.position.x, bomb.g.position.y, bomb.g.position.z] : null,
+  });
+  while (rec.frames.length && rec.frames[0].t < t - keep) rec.frames.shift();
+}
+
+// 時刻 t 以前で一番新しいフレーム（t が最初より前なら最初）
+function frameAt(rec, t) {
+  const F = rec.frames;
+  let lo = 0, hi = F.length - 1;
+  if (t <= F[0].t) return F[0];
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (F[mid].t <= t) lo = mid; else hi = mid - 1;
+  }
+  return F[lo];
+}
+
+// フレームの見た目を、選手と爆弾に当て直す
+function applyFrame(f, players, bomb) {
+  f.players.forEach((s, i) => {
+    const pl = players[i];
+    pl.root.position.x = s.p[0]; pl.root.position.y = s.p[1]; pl.root.position.z = s.p[2];
+    pl.root.rotation.y = s.ry;
+    pl.tumble.rotation.x = s.tr[0]; pl.tumble.rotation.z = s.tr[1];
+    JOINTS.forEach((n, k) => { const r = pl.j[n].rotation; r.x = s.j[k][0]; r.y = s.j[k][1]; r.z = s.j[k][2]; });
+    pl.j.hips.position.y = s.hy;
+  });
+  bomb.g.visible = bomb.shadow.visible = !!f.ball;
+  if (f.ball) {
+    bomb.g.position.x = f.ball[0]; bomb.g.position.y = f.ball[1]; bomb.g.position.z = f.ball[2];
+    bomb.shadow.position.x = f.ball[0]; bomb.shadow.position.z = f.ball[2];
+  }
 }
 // ===== 検証ハーネス =====
 const __results = [];
@@ -1950,6 +2050,65 @@ test('壁に張り付いたら stick（どの壁か）、起き上がったら g
   const s = R.events.find(e => e.type === 'stick');
   eq(s && [s.axis, s.sign], ['x', -1]);
   eq(R.events.some(e => e.type === 'getup' && e.actor === a), true);
+});
+
+// ===== 実況 =====
+test('実況：出来事の種類で文を選ぶ（爆発はどちらのコートか、天井、壁、起き上がり）', () => {
+  const C = { until: 0, prio: -1, last: '' };
+  eq(COMMENT_LINES.explodeThem.includes(pickComment(C, { type: 'explode', side: 1 }, 0, zero)), true);
+  const C2 = { until: 0, prio: -1, last: '' };
+  eq(COMMENT_LINES.explodeUs.includes(pickComment(C2, { type: 'explode', side: 0 }, 0, zero)), true);
+  eq(commentKey({ type: 'crash', y: CFG.gym.ceil - 0.45 }), 'ceiling');
+  eq(commentKey({ type: 'crash', y: 3 }), null, '壁への激突は stick で言う');
+  eq(commentKey({ type: 'hit', kind: 'receive', ok: false }), null, '弾いたレシーブはほめない');
+  eq(commentKey({ type: 'hit', kind: 'attack', ok: true }), 'attack');
+  eq(commentKey({ type: 'getup' }), 'getup');
+});
+
+test('実況：出している間（hold 秒）は、より大事な出来事だけ差し替える', () => {
+  const C = { until: 0, prio: -1, last: '' };
+  eq(!!pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 0, zero), true);
+  eq(pickComment(C, { type: 'hit', kind: 'toss', ok: true }, 0.5, zero), null, '同じか低い優先度は出さない');
+  eq(!!pickComment(C, { type: 'explode', side: 1 }, 0.6, zero), true, '爆発は差し替える');
+  eq(!!pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 0.6 + CFG.comment.hold + 0.01, zero), true, '時間がたてば出す');
+});
+
+test('実況：同じ文を続けて出さない', () => {
+  const C = { until: 0, prio: -1, last: '' };
+  const a = pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 0, zero);
+  const b = pickComment(C, { type: 'hit', kind: 'receive', ok: true }, 10, zero);
+  eq(a !== b, true);
+});
+
+// ===== リプレイ =====
+function fakePlayer(x) {                                   // 記録に使う項目だけを持つ選手の見た目
+  const j = {};
+  for (const n of JOINTS) j[n] = { rotation: { x: 0, y: 0, z: 0 }, position: { y: 0 } };
+  return { root: { position: { x, y: 0, z: 0 }, rotation: { y: 0 } }, tumble: { rotation: { x: 0, z: 0 } }, j };
+}
+function fakeBomb() { return { g: { visible: true, position: { x: 1, y: 2, z: 3 } }, shadow: { visible: true, position: { x: 0, y: 0, z: 0 } } }; }
+
+test('リプレイ：記録は keep 秒より古いものを捨て、frameAt はその時刻以前で一番新しいフレームを返す', () => {
+  const rec = makeRecorder(), pl = fakePlayer(0), bomb = fakeBomb();
+  for (let i = 0; i <= 100; i++) { pl.root.position.x = i; recordFrame(rec, i * 0.1, [pl], bomb, 5); }
+  eq(rec.frames[0].t >= 10 - 5 - 1e-9, true, '古いものは捨てる');
+  eq(frameAt(rec, 7.25).players[0].p[0], 72);
+  eq(frameAt(rec, 0).players[0].p[0], rec.frames[0].players[0].p[0], '範囲より前は最初');
+  eq(frameAt(rec, 99).players[0].p[0], 100, '範囲より後は最後');
+});
+
+test('リプレイ：applyFrame で、記録した位置・回転・関節・爆弾を当て直す', () => {
+  const rec = makeRecorder(), pl = fakePlayer(0), bomb = fakeBomb();
+  pl.root.position.x = 3; pl.root.rotation.y = 1; pl.tumble.rotation.x = 2; pl.j.kneeL.rotation.x = 1.5; pl.j.hips.position.y = 0.8;
+  recordFrame(rec, 0, [pl], bomb, 5);
+  bomb.g.visible = false;
+  recordFrame(rec, 1, [pl], bomb, 5);
+  const target = fakePlayer(0), b2 = fakeBomb();
+  applyFrame(frameAt(rec, 0), [target], b2);
+  eq([target.root.position.x, target.root.rotation.y, target.tumble.rotation.x, target.j.kneeL.rotation.x, target.j.hips.position.y], [3, 1, 2, 1.5, 0.8]);
+  eq([b2.g.visible, b2.g.position.x], [true, 1]);
+  applyFrame(frameAt(rec, 1), [target], b2);
+  eq([b2.g.visible, b2.shadow.visible], [false, false]);
 });
 
 // ===== 結果表示 =====

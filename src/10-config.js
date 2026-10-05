@@ -70,5 +70,8 @@ const CFG = {
     strideLen: 1.5,                                       // 走るとき脚が一回りする距離 m
     shuffleDist: 2.5,                                     // これより近い所へはサイドステップ（ネットを向いたまま）
   },
+  // ---- Phase 5：演出 ----
+  comment: { hold: 2.2 },                                 // 実況の文を出しておく秒数（この間は、より大事な出来事だけ差し替える）
+  replay: { before: 0.5, after: 2.0, speed: 0.5, keep: 8, fov: 50 },   // 爆発の何秒前から何秒後まで、何倍の速さで。記録は 8 秒ぶん
   camera: { y: 8.5, z: 17, lookY: 2.0, fov: 42, follow: 0.25, boomFov: 58, boomLookY: 3.3 },   // 爆発の間は画角を広げて、天井・横の壁・倒れた人まで入れる
 };
